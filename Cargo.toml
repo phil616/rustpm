@@ -1,0 +1,23 @@
+[package]
+name = "rustpm"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rustpmd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "process", "time", "fs", "sync", "net", "io-util"] }
+axum = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+nix = { version = "0.29", default-features = false, features = ["signal", "process", "user"] }
+shlex = "1"
+sha2 = "0.10"
+rand = "0.8"
+argon2 = "0.5"

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>club.motofans.rustpm</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lib/rustpm/rustpmd</string>
+    <string>run</string>
+    <string>--config</string>
+    <string>/usr/local/etc/rustpm/rustpmd.conf</string>
+    <string>--config-dir</string>
+    <string>/usr/local/etc/rustpm/programs.d</string>
+    <string>--socket</string>
+    <string>/usr/local/var/run/rustpm/rustpmd.sock</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+
+  <key>WorkingDirectory</key>
+  <string>/usr/local/lib/rustpm</string>
+
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/log/rustpm.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/log/rustpm.err.log</string>
+</dict>
+</plist>

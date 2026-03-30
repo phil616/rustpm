@@ -1,0 +1,98 @@
+#!/bin/sh
+set -eu
+
+LABEL="club.motofans.rustpm"
+PRIVD_LABEL="club.motofans.rustpm-privd"
+PLIST="/Library/LaunchDaemons/${LABEL}.plist"
+PRIVD_PLIST="/Library/LaunchDaemons/${PRIVD_LABEL}.plist"
+RETRY_MAX=5
+RETRY_SLEEP=1
+
+retry_cmd() {
+  desc="$1"
+  shift
+  i=1
+  while [ "$i" -le "$RETRY_MAX" ]; do
+    if "$@"; then
+      return 0
+    fi
+    if [ "$i" -eq "$RETRY_MAX" ]; then
+      echo "postinstall: failed after ${RETRY_MAX} attempts: ${desc}" >&2
+      return 1
+    fi
+    sleep "$RETRY_SLEEP"
+    i=$((i + 1))
+  done
+}
+
+safe_bootout() {
+  label="$1"
+  launchctl bootout "system/${label}" >/dev/null 2>&1 || true
+}
+
+bootstrap_enable_kickstart() {
+  label="$1"
+  plist="$2"
+
+  i=1
+  while [ "$i" -le "$RETRY_MAX" ]; do
+    launchctl enable "system/${label}" >/dev/null 2>&1 || true
+    if launchctl bootstrap system "$plist" >/dev/null 2>&1; then
+      if launchctl kickstart -k "system/${label}" >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+
+    safe_bootout "$label"
+    if [ "$i" -eq "$RETRY_MAX" ]; then
+      echo "postinstall: bootstrap/kickstart failed for ${label}" >&2
+      return 1
+    fi
+    sleep "$RETRY_SLEEP"
+    i=$((i + 1))
+  done
+}
+
+mkdir -p /usr/local/etc/rustpm
+mkdir -p /usr/local/etc/rustpm/programs.d
+mkdir -p /usr/local/var/log
+mkdir -p /usr/local/var/run/rustpm
+
+if [ ! -f /usr/local/etc/rustpm/rustpmd.conf ]; then
+  cp /usr/local/lib/rustpm/rustpmd.example.conf /usr/local/etc/rustpm/rustpmd.conf
+fi
+
+if [ ! -f /usr/local/etc/rustpm/programs.d/example.conf ]; then
+  cp /usr/local/lib/rustpm/example.conf /usr/local/etc/rustpm/programs.d/example.conf
+fi
+
+chown -R root:wheel /usr/local/etc/rustpm
+chmod 700 /usr/local/etc/rustpm
+chmod 700 /usr/local/etc/rustpm/programs.d
+if [ -f /usr/local/etc/rustpm/rustpmd.conf ]; then
+  chmod 600 /usr/local/etc/rustpm/rustpmd.conf
+fi
+find /usr/local/etc/rustpm/programs.d -type f -name "*.conf" -exec chmod 600 {} \;
+
+chown root:wheel "$PLIST"
+chmod 644 "$PLIST"
+chown root:wheel "$PRIVD_PLIST"
+chmod 644 "$PRIVD_PLIST"
+chown -R root:wheel /usr/local/lib/rustpm
+if [ -f /usr/local/lib/rustpm/uninstall_rustpm.sh ]; then
+  chmod 755 /usr/local/lib/rustpm/uninstall_rustpm.sh
+fi
+chown -R root:wheel /usr/local/var/run/rustpm
+chmod 700 /usr/local/var/run/rustpm
+
+safe_bootout "$PRIVD_LABEL"
+safe_bootout "$LABEL"
+
+if ! retry_cmd "bootstrap+kickstart ${PRIVD_LABEL}" bootstrap_enable_kickstart "$PRIVD_LABEL" "$PRIVD_PLIST"; then
+  echo "postinstall: warning: ${PRIVD_LABEL} not started during install; install will continue" >&2
+fi
+if ! retry_cmd "bootstrap+kickstart ${LABEL}" bootstrap_enable_kickstart "$LABEL" "$PLIST"; then
+  echo "postinstall: warning: ${LABEL} not started during install; install will continue" >&2
+fi
+
+exit 0

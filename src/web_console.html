@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>rustpmd console</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui; margin: 24px; max-width: 1200px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin: 12px 0; }
+    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    input, button { padding: 8px 10px; margin: 0; }
+    input { min-width: 280px; }
+    .muted { color: rgb(80, 80, 80); font-size: 14px; margin-top: 8px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 16px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+  </style>
+</head>
+<body>
+  <h2>rustpmd web console</h2>
+
+  <div id="loginPanel" class="card">
+    <div class="row">
+      <label>Password</label>
+      <input id="loginPassword" type="password" autocomplete="off" placeholder="Enter password">
+      <button onclick="login()">Login</button>
+      <button onclick="clearStoredPassword()">Clear</button>
+    </div>
+    <div class="muted">You must login before service data is visible.</div>
+  </div>
+
+  <div id="status" class="muted"></div>
+
+  <div id="appPanel" style="display:none;">
+    <div class="card">
+      <div class="row">
+        <button onclick="safeRefresh()">Refresh Services</button>
+        <button onclick="rescanConfig()">Rescan Config</button>
+        <button onclick="logout()">Logout</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Change Password</h3>
+      <div class="row">
+        <label>Current Password</label>
+        <input id="currentPassword" type="password" placeholder="Current password">
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <label>New Password</label>
+        <input id="newPassword" type="password" placeholder="At least 8 characters">
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <label>Repeat New Password</label>
+        <input id="repeatNewPassword" type="password" placeholder="Repeat new password">
+        <button onclick="changePassword()">Change Password</button>
+      </div>
+      <div class="muted">Password change requires Current Password and New Password.</div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">rustpm Logs</h3>
+      <div class="row">
+        <button onclick="viewRustpmLog('main')">rustpmd stdout</button>
+        <button onclick="viewRustpmLog('main_err')">rustpmd stderr</button>
+        <button onclick="viewRustpmLog('privd')">rustpm-privd stdout</button>
+        <button onclick="viewRustpmLog('privd_err')">rustpm-privd stderr</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Runtime Contract</h3>
+      <div class="muted" id="runtimeContract">loading...</div>
+    </div>
+
+    <table>
+      <thead><tr><th>Service</th><th>Config File</th><th>State</th><th>PID</th><th>Restarts</th><th>Message</th><th>Actions</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+
+    <div class="card">
+      <h3 id="logTitle" style="margin-top:0;">Logs</h3>
+      <div class="muted" id="logPath"></div>
+      <pre id="logContent" style="max-height: 360px; overflow: auto; background: #111; color: #eee; padding: 12px; border-radius: 6px; white-space: pre-wrap;"></pre>
+    </div>
+  </div>
+<script>
+  const API_VERSION = "v1";
+  function baseName(path) {
+    if (!path) return "-";
+    const idx = path.lastIndexOf("/");
+    return idx >= 0 ? path.slice(idx + 1) : path;
+  }
+  function setStatus(msg, isError=false) {
+    const el = document.getElementById("status");
+    el.textContent = msg || "";
+    el.style.color = isError ? "rgb(176, 0, 32)" : "rgb(68, 68, 68)";
+  }
+  function setAuthed(authed) {
+    document.getElementById("loginPanel").style.display = authed ? "none" : "";
+    document.getElementById("appPanel").style.display = authed ? "" : "none";
+  }
+  function clearStoredPassword() {
+    document.getElementById("loginPassword").value = "";
+    setAuthed(false);
+    setStatus("Password cleared.");
+  }
+  async function logout() {
+    try {
+      await fetch("/api/web/logout", { method: "POST", credentials: "same-origin" });
+    } catch (_) {}
+    setAuthed(false);
+    document.getElementById("loginPassword").value = "";
+    const rows = document.getElementById("rows");
+    rows.innerHTML = "";
+    setStatus("Logged out.");
+  }
+  async function api(path, method="GET") {
+    const resp = await fetch(path, {
+      method,
+      credentials: "same-origin",
+      headers: { "x-rustpm-api-version": API_VERSION },
+    });
+    const text = await resp.text();
+    let parsed = null;
+    try { parsed = text ? JSON.parse(text) : null; } catch (_) {}
+    if (!resp.ok) {
+      const msg = formatApiError(parsed, text, resp.status);
+      throw new Error(msg);
+    }
+    return parsed || {};
+  }
+  async function apiJson(path, body, method="POST") {
+    const resp = await fetch(path, {
+      method,
+      credentials: "same-origin",
+      headers: {
+        "content-type": "application/json",
+        "x-rustpm-api-version": API_VERSION,
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await resp.text();
+    let parsed = null;
+    try { parsed = text ? JSON.parse(text) : null; } catch (_) {}
+    if (!resp.ok) {
+      const msg = formatApiError(parsed, text, resp.status);
+      throw new Error(msg);
+    }
+    return parsed || {};
+  }
+  function formatApiError(parsed, text, status) {
+    const msg = (parsed && parsed.message) ? parsed.message : (text || `HTTP ${status}`);
+    const code = (parsed && parsed.code) ? parsed.code : "";
+    return code ? `${code}: ${msg}` : msg;
+  }
+  async function action(name, op) {
+    try {
+      const resp = await api(`/api/services/${name}/${op}`, "POST");
+      await refreshList();
+      setStatus(resp.message || `${op} ok: ${name}`);
+    } catch (e) {
+      setStatus(`${op} failed for ${name}: ${String(e)}`, true);
+    }
+  }
+  async function viewServiceLog(name, stream) {
+    try {
+      const data = await api(`/api/logs/services/${name}/${stream}?lines=200`);
+      document.getElementById("logTitle").textContent = `${name} ${stream} log`;
+      document.getElementById("logPath").textContent = data.path || "";
+      document.getElementById("logContent").textContent = data.content || "";
+      setStatus(`log loaded: ${name} ${stream}`);
+    } catch (e) {
+      setStatus(`load log failed for ${name} ${stream}: ${String(e)}`, true);
+    }
+  }
+  async function viewRustpmLog(kind) {
+    try {
+      const data = await api(`/api/logs/rustpm/${kind}?lines=200`);
+      document.getElementById("logTitle").textContent = `rustpm ${kind} log`;
+      document.getElementById("logPath").textContent = data.path || "";
+      document.getElementById("logContent").textContent = data.content || "";
+      setStatus(`log loaded: rustpm ${kind}`);
+    } catch (e) {
+      setStatus(`load rustpm log failed (${kind}): ${String(e)}`, true);
+    }
+  }
+  async function safeRefresh() {
+    try {
+      await refreshList();
+    } catch (e) {
+      setStatus(String(e), true);
+    }
+  }
+  async function rescanConfig() {
+    try {
+      const resp = await api("/api/web/rescan", "POST");
+      setStatus(resp.message || "Config rescanned.");
+      await refreshList();
+    } catch (e) {
+      setStatus(String(e), true);
+    }
+  }
+  async function login() {
+    const pwd = document.getElementById("loginPassword").value || "";
+    if (!pwd) {
+      setStatus("Please input password.", true);
+      return;
+    }
+    try {
+      await apiJson("/api/web/login", { password: pwd }, "POST");
+      await refreshList();
+      setAuthed(true);
+      setStatus("Login success.");
+    } catch (e) {
+      setAuthed(false);
+      setStatus("Login failed: " + String(e), true);
+    }
+  }
+  async function changePassword() {
+    try {
+      const currentPassword = document.getElementById("currentPassword").value || "";
+      const newPassword = document.getElementById("newPassword").value || "";
+      const repeatNewPassword = document.getElementById("repeatNewPassword").value || "";
+      if (!currentPassword) {
+        setStatus("Current Password is required.", true);
+        return;
+      }
+      if ((newPassword || "").length < 8) {
+        setStatus("New Password must be at least 8 characters.", true);
+        return;
+      }
+      if (newPassword !== repeatNewPassword) {
+        setStatus("New Password and Repeat New Password do not match.", true);
+        return;
+      }
+      if (currentPassword === newPassword) {
+        setStatus("New Password must be different from Current Password.", true);
+        return;
+      }
+      await apiJson("/api/web/password", { current_password: currentPassword, new_password: newPassword }, "POST");
+      await apiJson("/api/web/logout", {}, "POST");
+      setAuthed(false);
+      document.getElementById("loginPassword").value = "";
+      document.getElementById("currentPassword").value = "";
+      document.getElementById("newPassword").value = "";
+      document.getElementById("repeatNewPassword").value = "";
+      setStatus("Password updated. Please login with the new password.");
+    } catch (e) {
+      setStatus(String(e), true);
+    }
+  }
+  async function refreshList() {
+    await refreshRuntimeContract();
+    const data = await api("/api/services");
+    const rows = document.getElementById("rows");
+    rows.innerHTML = "";
+    function appendTextCell(tr, value, title = "") {
+      const td = document.createElement("td");
+      td.textContent = value;
+      if (title) {
+        td.title = title;
+      }
+      tr.appendChild(td);
+      return td;
+    }
+    function appendActionButton(parent, label, onClick, title = "") {
+      const btn = document.createElement("button");
+      btn.textContent = label;
+      if (title) {
+        btn.title = title;
+      }
+      btn.addEventListener("click", onClick);
+      parent.appendChild(btn);
+      return btn;
+    }
+    for (const s of (data.services || [])) {
+      const tr = document.createElement("tr");
+      appendTextCell(tr, String(s.name || ""));
+      appendTextCell(tr, baseName(s.source_file), String(s.source_file || ""));
+      appendTextCell(tr, String(s.state || ""));
+      appendTextCell(tr, s.pid == null ? "-" : String(s.pid));
+      appendTextCell(tr, String(s.restarts ?? 0));
+      appendTextCell(tr, String(s.message || ""));
+
+      const actions = document.createElement("td");
+      appendActionButton(actions, "start", () => action(s.name, "start"));
+      appendActionButton(actions, "stop", () => action(s.name, "stop"));
+      appendActionButton(
+        actions,
+        "hard-restart",
+        () => action(s.name, "restart"),
+        "full restart for rename/topology changes"
+      );
+      appendActionButton(actions, "reload", () => action(s.name, "reload"));
+      if (s.stdout_logfile) {
+        appendActionButton(actions, "stdout log", () => viewServiceLog(s.name, "stdout"));
+      }
+      if (s.stderr_logfile) {
+        appendActionButton(actions, "stderr log", () => viewServiceLog(s.name, "stderr"));
+      }
+      tr.appendChild(actions);
+      rows.appendChild(tr);
+    }
+    setStatus("Connected.");
+  }
+
+  async function refreshRuntimeContract() {
+    const el = document.getElementById("runtimeContract");
+    try {
+      const data = await api("/api/meta/runtime-contract");
+      const c = data.runtime_contract || {};
+      el.textContent =
+        `config=${c.config_schema || "-"}, api=${c.api_schema || "-"}, policy=${c.policy_provider || "-"}, session_ttl=${c.web_session_ttl_secs ?? "-"}, max_sessions=${c.web_max_sessions ?? "-"}, web_program_config_write=${c.web_program_config_write ?? "-"}, web_service_control=${c.web_service_control ?? "-"}, web_rescan=${c.web_rescan ?? "-"}`;
+    } catch (e) {
+      el.textContent = `load failed: ${String(e)}`;
+    }
+  }
+  document.getElementById("loginPassword").value = "";
+  setAuthed(false);
+  (async () => {
+    try {
+      await refreshList();
+      setAuthed(true);
+      setStatus("Connected.");
+    } catch (_) {
+      setAuthed(false);
+      setStatus("Please login.");
+    }
+  })();
+</script>
+</body>
+</html>
