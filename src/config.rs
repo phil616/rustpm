@@ -11,6 +11,7 @@ use serde::Deserialize;
 use nix::unistd::User;
 
 use crate::auth::{default_password_hash, is_hash_format};
+#[cfg(unix)]
 use crate::platform_fs;
 
 #[cfg(unix)]
@@ -1024,6 +1025,7 @@ fn ensure_runtime_program_dir_security(path: &Path) -> Result<()> {
 }
 
 #[cfg(not(unix))]
+#[allow(dead_code)]
 fn ensure_runtime_program_dir_security(_path: &Path) -> Result<()> {
     Ok(())
 }
@@ -1039,6 +1041,7 @@ fn repair_program_file_security(path: &Path) -> Result<()> {
 }
 
 #[cfg(not(unix))]
+#[allow(dead_code)]
 fn repair_program_file_security(_path: &Path) -> Result<()> {
     Ok(())
 }
@@ -1062,6 +1065,7 @@ fn repair_program_dir_security(path: &Path) -> Result<()> {
 }
 
 #[cfg(not(unix))]
+#[allow(dead_code)]
 fn repair_program_dir_security(_path: &Path) -> Result<()> {
     Ok(())
 }

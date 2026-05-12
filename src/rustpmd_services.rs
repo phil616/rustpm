@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use std::ffi::CString;
 #[path = "rustpmd_services_sync.rs"]
 mod rustpmd_services_sync;
 #[path = "rustpmd_services_view.rs"]
@@ -156,7 +158,7 @@ async fn spawn_service(svc: &ServiceConfig) -> Result<StartedService> {
                 Ok(job) => {
                     if let Ok(proc_handle) = OpenProcess(PROCESS_CREATE_PROCESS, false, pid_u32) {
                         AssignProcessToJobObject(job, proc_handle).ok();
-                        CloseHandle(proc_handle);
+                        let _ = CloseHandle(proc_handle);
                     }
                     job.0 as usize
                 }

@@ -37,6 +37,7 @@ extern "system" {
     fn StartServiceCtrlDispatcherW(lpServiceTable: *const SERVICE_TABLE_ENTRY) -> i32;
     fn RegisterServiceCtrlHandlerExW(lpServiceName: *const u16, lpHandlerProc: LphandlerFunctionEx, lpContext: *mut std::ffi::c_void) -> isize;
     fn SetServiceStatus(hService: isize, lpServiceStatus: *const SERVICE_STATUS) -> i32;
+    fn ChangeServiceConfig2W(hService: *mut std::ffi::c_void, dwInfoLevel: u32, lpInfo: *const std::ffi::c_void) -> i32;
 }
 
 type LphandlerFunctionEx = unsafe extern "system" fn(u32, u32, *mut std::ffi::c_void, *mut std::ffi::c_void) -> u32;
@@ -78,6 +79,23 @@ const SERVICE_START_PENDING: u32 = 0x00000002;
 const SERVICE_STOP_PENDING: u32 = 0x00000006;
 const SERVICE_ACCEPT_STOP: u32 = 0x00000020;
 const SERVICE_ACCEPT_SHUTDOWN: u32 = 0x00000040;
+const SERVICE_CONFIG_FAILURE_ACTIONS: u32 = 0x00000002;
+const SC_ACTION_RESTART: u32 = 0x00000001;
+
+#[repr(C)]
+struct SC_ACTION {
+    sc_action_type: u32,
+    sc_delay: u32,
+}
+
+#[repr(C)]
+struct SERVICE_FAILURE_ACTIONS {
+    sc_dwResetPeriod: u32,
+    sc_lpRebootMsg: *const u16,
+    sc_lpCommand: *const u16,
+    sc_cActions: u32,
+    sc_lpsaActions: *const SC_ACTION,
+}
 
 static SERVICE_HANDLE: AtomicUsize = AtomicUsize::new(0);
 static SERVICE_CHECKPOINT: AtomicU32 = AtomicU32::new(0);
@@ -244,6 +262,50 @@ pub fn stop_service() -> Result<()> {
     }
 }
 
+pub fn configure_service_failure_actions() -> Result<()> {
+    let actions = [SC_ACTION {
+        sc_action_type: SC_ACTION_RESTART,
+        sc_delay: 5000,
+    }];
+    let failure_actions = SERVICE_FAILURE_ACTIONS {
+        sc_dwResetPeriod: 86400,
+        sc_lpRebootMsg: std::ptr::null(),
+        sc_lpCommand: std::ptr::null(),
+        sc_cActions: 1,
+        sc_lpsaActions: actions.as_ptr(),
+    };
+
+    unsafe {
+        let sc_manager = OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_ALL_ACCESS);
+        if sc_manager.is_null() {
+            return Err(anyhow!("failed to open SC Manager for failure actions"));
+        }
+
+        let service_name_wide: Vec<u16> = SERVICE_NAME.encode_utf16().chain(std::iter::once(0)).collect();
+        let service_handle = OpenServiceW(sc_manager, service_name_wide.as_ptr(), SERVICE_ALL_ACCESS);
+        if service_handle.is_null() {
+            let _ = CloseServiceHandle(sc_manager);
+            return Err(anyhow!("failed to open service for failure actions"));
+        }
+
+        let ret = ChangeServiceConfig2W(
+            service_handle,
+            SERVICE_CONFIG_FAILURE_ACTIONS,
+            &failure_actions as *const _ as *const std::ffi::c_void,
+        );
+
+        let _ = CloseServiceHandle(service_handle);
+        let _ = CloseServiceHandle(sc_manager);
+
+        if ret != 0 {
+            tracing::info!(service = SERVICE_NAME, "SCM failure actions configured (auto-restart)");
+            Ok(())
+        } else {
+            Err(anyhow!("ChangeServiceConfig2W failed"))
+        }
+    }
+}
+
 pub fn install_service(config_path: &PathBuf) -> Result<()> {
     let exe_path = super::get_current_exe_path()?;
     let exe_path_str = exe_path.to_string_lossy();
@@ -285,9 +347,11 @@ pub fn install_service(config_path: &PathBuf) -> Result<()> {
     }
 
     tracing::info!(service = SERVICE_NAME, "Windows Service installed successfully");
-    // TODO(windows-recovery): configure SCM failure actions (auto-restart)
-    // after service install, so unexpected exits can be self-healed by Windows.
-    // Candidate APIs: ChangeServiceConfig2W + SERVICE_FAILURE_ACTIONS.
+
+    if let Err(e) = configure_service_failure_actions() {
+        tracing::warn!(error = %e, "failed to configure SCM failure actions (non-fatal)");
+    }
+
     Ok(())
 }
 

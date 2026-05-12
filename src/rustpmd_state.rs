@@ -34,6 +34,7 @@ pub(super) enum ControlOutcome {
 
 pub(super) struct RunningChild {
     pub(super) child: Child,
+    #[allow(dead_code)]
     pub(super) pgid: i32,
     pub(super) pid_u32: u32,
     #[cfg(windows)]

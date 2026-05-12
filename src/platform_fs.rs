@@ -122,7 +122,7 @@ pub fn current_file_identity(path: &Path) -> Result<FileIdentity> {
 
 #[cfg(windows)]
 pub fn current_file_identity(path: &Path) -> Result<FileIdentity> {
-    let meta = std::fs::metadata(path)
+    let _meta = std::fs::metadata(path)
         .with_context(|| format!("failed to stat path: {}", path.display()))?;
     let canonical = path.canonicalize()
         .with_context(|| format!("failed to canonicalize path: {}", path.display()))?;

@@ -107,8 +107,6 @@ pub(super) async fn wait_for_shutdown_signal() {
 
 #[cfg(not(unix))]
 pub(super) async fn wait_for_shutdown_signal() {
-    use tokio::sync::watch;
-
     if let Some(mut rx) = crate::platform::windows::service::service_stop_receiver() {
         if *rx.borrow() {
             return;

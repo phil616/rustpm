@@ -405,12 +405,25 @@ async fn attempt_privd_recovery(privd_socket: &Path) -> Result<()> {
 
     #[cfg(not(unix))]
     {
-        // TODO(windows-recovery): add parity with Unix recovery path.
-        // Suggested implementation:
-        // 1) query/restart rustpm-privd Windows service via SCM APIs
-        // 2) wait for named-pipe readiness with a bounded timeout
-        // 3) keep fatal fallback if recovery attempt fails
-        let _ = privd_socket;
-        Err(anyhow!("automatic priv-helper recovery is not implemented on this platform"))
+        let _ = Command::new("taskkill")
+            .args(["/F", "/IM", "rustpm-privd.exe"])
+            .status()
+            .await;
+
+        let start_status = Command::new("sc")
+            .args(["start", "rustpm-privd"])
+            .status()
+            .await
+            .context("failed to execute sc start rustpm-privd")?;
+
+        if !start_status.success() {
+            return Err(anyhow!(
+                "sc start rustpm-privd failed with status {}",
+                start_status
+            ));
+        }
+
+        wait_for_privd_ready(privd_socket, 15).await?;
+        Ok(())
     }
 }

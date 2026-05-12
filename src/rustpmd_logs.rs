@@ -5,7 +5,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, Context, Result};
+#[cfg(unix)]
+use anyhow::anyhow;
+use anyhow::{Context, Result};
 use axum::{
     extract::{ConnectInfo, Path as AxPath, Query, State},
     http::{HeaderMap, StatusCode},

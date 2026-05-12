@@ -86,6 +86,7 @@ pub(super) async fn terminate_process_group_impl(
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 pub(super) fn send_group_signal_impl(_service_name: &str, _pgid: i32, _sig: ()) -> Result<()> {
     Ok(())
 }

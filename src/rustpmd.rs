@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    ffi::CString,
     fs::{self, OpenOptions},
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
@@ -28,11 +27,7 @@ use nix::{
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
-#[cfg(windows)]
-use tokio::net::TcpListener;
-
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
     sync::{broadcast, mpsc, RwLock},
     time::{sleep, timeout, Instant},
