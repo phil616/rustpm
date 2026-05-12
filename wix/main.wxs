@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!-- ============================================================
+       rustpm MSI Installer
+       Compatible with WiX Toolset v5
+
+       Build:
+         wix build main.wxs -arch x64 -o dist\rustpm-<version>-x64.msi
+
+       Double-click the .msi to install (UAC elevation prompt).
+       Or command-line:
+         msiexec /i rustpm-0.1.1-x64.msi                    (GUI)
+         msiexec /i rustpm-0.1.1-x64.msi /quiet /norestart   (silent)
+         msiexec /x rustpm-0.1.1-x64.msi                     (uninstall)
+         msiexec /i rustpm-0.1.1-x64.msi /f                 (repair)
+  ============================================================ -->
+
+  <Package Name="rustpm"
+           Manufacturer="rustpm"
+           Version="0.1.1"
+           UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+           ProductCode="*"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <!-- ====== Upgrade handling ======
+         Removes previous versions with the same UpgradeCode.
+         The old version is uninstalled first, then the new version
+         is installed. Services are stopped+removed during the
+         old version's uninstall phase.
+    -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of rustpm is already installed."
+                  Schedule="afterInstallExecute"
+                  AllowSameVersionUpgrades="yes" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="MainFeature" Title="rustpm" Level="1">
+      <ComponentGroupRef Id="Binaries" />
+      <ComponentGroupRef Id="Config" />
+      <ComponentGroupRef Id="ProgramsDirGroup" />
+      <ComponentGroupRef Id="Cleanup" />
+      <ComponentGroupRef Id="RuntimeLogs" />
+      <ComponentGroupRef Id="RegistryInfo" />
+    </Feature>
+
+    <!-- ====== Directory Structure ====== -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="rustpm">
+        <Directory Id="ConfigDir" Name="config">
+          <Directory Id="ProgramsDir" Name="programs.d" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- ProgramData for runtime logs -->
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DataDir" Name="rustpm">
+        <Directory Id="RuntimeLogsDir" Name="logs" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- ====== Binaries ====== -->
+    <ComponentGroup Id="Binaries" Directory="INSTALLFOLDER">
+      <!-- rustpmd service -->
+      <Component Id="cmpRustpmdExe" Guid="{12345678-ABCD-4DEF-9012-34567890ABCD}">
+        <File Id="rustpmdExe" Source="..\target\release\rustpmd.exe" KeyPath="yes" />
+        <ServiceInstall Id="RustpmService"
+                        Name="rustpm"
+                        DisplayName="rustpm"
+                        Description="rustpm Process Manager"
+                        Type="ownProcess"
+                        Start="auto"
+                        Account="LocalSystem"
+                        ErrorControl="normal"
+                        Arguments='run --config "[ConfigDir]rustpmd.conf"'>
+          <ServiceDependency Id="rustpm-privd" />
+        </ServiceInstall>
+        <ServiceControl Id="RustpmServiceControl"
+                        Name="rustpm"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+
+      <!-- rustpm-privd service -->
+      <Component Id="cmpRustpmPrivdExe" Guid="{72345678-ABCD-4DEF-9012-34567890ABCD}">
+        <File Id="rustpmPrivdExe" Source="..\target\release\rustpm-privd.exe" KeyPath="yes" />
+        <ServiceInstall Id="RustpmPrivdService"
+                        Name="rustpm-privd"
+                        DisplayName="rustpm-privd"
+                        Description="rustpm Privileged Helper"
+                        Type="ownProcess"
+                        Start="auto"
+                        Account="LocalSystem"
+                        ErrorControl="normal"
+                        Arguments='--config "[ConfigDir]rustpmd.conf"' />
+        <ServiceControl Id="RustpmPrivdServiceControl"
+                        Name="rustpm-privd"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+
+      <!-- rustpmctl (no service) -->
+      <Component Id="cmpRustpmctlExe" Guid="{22345678-ABCD-4DEF-9012-34567890ABCD}">
+        <File Id="rustpmctlExe" Source="..\target\release\rustpmctl.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ====== Config (preserved on upgrade, removed on uninstall) ====== -->
+    <ComponentGroup Id="Config" Directory="ConfigDir">
+      <Component Id="cmpDaemonConf" Guid="{32345678-ABCD-4DEF-9012-34567890ABCD}" NeverOverwrite="yes">
+        <File Id="DaemonConf" Source="..\config\windows\rustpmd.conf" KeyPath="yes" />
+        <RemoveFile Id="RemoveDaemonConf" Name="rustpmd.conf" On="uninstall" Directory="ConfigDir" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ====== Programs directory ====== -->
+    <ComponentGroup Id="ProgramsDirGroup" Directory="ProgramsDir">
+      <Component Id="cmpProgramsDir" Guid="{82345678-ABCD-4DEF-9012-34567890ABCD}">
+        <CreateFolder />
+      </Component>
+      <Component Id="cmpExampleProg" Guid="{42345678-ABCD-4DEF-9012-34567890ABCD}" NeverOverwrite="yes">
+        <File Id="ExampleProg" Source="..\config\windows\programs.d\example.conf" KeyPath="yes" />
+        <RemoveFile Id="RemoveExampleProg" Name="example.conf" On="uninstall" Directory="ProgramsDir" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ====== Directory cleanup on uninstall ======
+         RemoveFolder removes the directory only if empty.
+         Since config files are removed via RemoveFile above,
+         the config/ and programs.d/ dirs should be empty and
+         thus cleaned up. The INSTALLFOLDER is cleaned last.
+    -->
+    <ComponentGroup Id="Cleanup" Directory="INSTALLFOLDER">
+      <Component Id="cmpCleanupProgramsDir" Guid="{92345678-ABCD-4DEF-9012-34567890ABCD}">
+        <CreateFolder />
+        <RemoveFolder Id="RemoveProgramsDir" On="uninstall" Directory="ProgramsDir" />
+      </Component>
+      <Component Id="cmpCleanupConfigDir" Guid="{A2345678-ABCD-4DEF-9012-34567890ABCD}">
+        <CreateFolder />
+        <RemoveFolder Id="RemoveConfigDir" On="uninstall" Directory="ConfigDir" />
+      </Component>
+      <Component Id="cmpCleanupInstallDir" Guid="{B2345678-ABCD-4DEF-9012-34567890ABCD}">
+        <CreateFolder />
+        <RemoveFolder Id="RemoveInstallDir" On="uninstall" Directory="INSTALLFOLDER" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ====== Runtime Logs (ProgramData) — NEVER removed on uninstall ====== -->
+    <ComponentGroup Id="RuntimeLogs" Directory="RuntimeLogsDir">
+      <Component Id="cmpRuntimeLogs" Guid="{52345678-ABCD-4DEF-9012-34567890ABCD}">
+        <CreateFolder />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ====== Registry ====== -->
+    <ComponentGroup Id="RegistryInfo" Directory="INSTALLFOLDER">
+      <Component Id="cmpRegistry" Guid="{62345678-ABCD-4DEF-9012-34567890ABCD}">
+        <RegistryKey Id="RegKeyRoot" Root="HKLM" Key="SOFTWARE\rustpm" ForceCreateOnInstall="yes">
+          <RegistryValue Name="InstallPath"
+                         Value="[INSTALLFOLDER]"
+                         Type="string" />
+          <RegistryValue Name="Version"
+                         Value="0.1.1"
+                         Type="string" />
+        </RegistryKey>
+      </Component>
+    </ComponentGroup>
+
+    <!-- ====== Uninstall: force-kill running processes before ServiceControl ====== -->
+    <CustomAction Id="KillRustpmd"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="[SystemFolder]taskkill.exe /F /IM rustpmd.exe"
+                  Execute="firstSequence"
+                  Impersonate="no"
+                  Return="ignore" />
+    <CustomAction Id="KillRustpmPrivd"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="[SystemFolder]taskkill.exe /F /IM rustpm-privd.exe"
+                  Execute="firstSequence"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="KillRustpmd" Before="StopServices" />
+      <Custom Action="KillRustpmPrivd" Before="StopServices" />
+    </InstallExecuteSequence>
+
+  </Package>
+</Wix>

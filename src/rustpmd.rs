@@ -17,14 +17,22 @@ use axum::{
     routing::{get, post},
     Router,
 };
+
+#[cfg(unix)]
 use nix::{
     errno::Errno,
     sys::signal::{killpg, Signal},
     unistd::{setgid, setpgid, setuid, Gid, Pid, Uid, User},
 };
+
+#[cfg(unix)]
+use tokio::net::{UnixListener, UnixStream};
+
+#[cfg(windows)]
+use tokio::net::TcpListener;
+
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::{UnixListener, UnixStream},
     process::{Child, Command},
     sync::{broadcast, mpsc, RwLock},
     time::{sleep, timeout, Instant},
@@ -89,11 +97,27 @@ pub enum DaemonRole {
 
 
 const SESSION_COOKIE_NAME: &str = "rustpm_session";
+#[cfg(unix)]
 const RUSTPM_MAIN_LOG: &str = "/usr/local/var/log/rustpm.log";
+#[cfg(unix)]
 const RUSTPM_MAIN_ERR_LOG: &str = "/usr/local/var/log/rustpm.err.log";
+#[cfg(unix)]
 const RUSTPM_PRIVD_LOG: &str = "/usr/local/var/log/rustpm-privd.log";
+#[cfg(unix)]
 const RUSTPM_PRIVD_ERR_LOG: &str = "/usr/local/var/log/rustpm-privd.err.log";
+#[cfg(unix)]
 const LOG_ROOT: &str = "/usr/local/var/log";
+
+#[cfg(windows)]
+const RUSTPM_MAIN_LOG: &str = "C:\\ProgramData\\rustpm\\logs\\rustpm.log";
+#[cfg(windows)]
+const RUSTPM_MAIN_ERR_LOG: &str = "C:\\ProgramData\\rustpm\\logs\\rustpm.err.log";
+#[cfg(windows)]
+const RUSTPM_PRIVD_LOG: &str = "C:\\ProgramData\\rustpm\\logs\\rustpm-privd.log";
+#[cfg(windows)]
+const RUSTPM_PRIVD_ERR_LOG: &str = "C:\\ProgramData\\rustpm\\logs\\rustpm-privd.err.log";
+#[cfg(windows)]
+const LOG_ROOT: &str = "C:\\ProgramData\\rustpm\\logs";
 
 pub async fn run(
     services: Vec<ServiceConfig>,
@@ -127,6 +151,7 @@ pub async fn run(
     }
 
     prepare_socket_path(socket_path)?;
+    #[cfg(unix)]
     let listener = UnixListener::bind(socket_path)
         .with_context(|| format!("failed to bind socket {}", socket_path.display()))?;
     set_socket_permissions(socket_path)?;
@@ -180,8 +205,13 @@ pub async fn run(
     let policies_for_control = policies.clone();
     let startup_policy_for_control = startup_policy.clone();
     let control_task = tokio::spawn(async move {
+        #[cfg(windows)]
+        let pipe_arg = socket_path_buf.clone();
         run_control_server(
+            #[cfg(unix)]
             listener,
+            #[cfg(windows)]
+            pipe_arg,
             control_handles,
             control_state,
             elevated_for_control,

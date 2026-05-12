@@ -122,13 +122,18 @@ pub fn current_file_identity(path: &Path) -> Result<FileIdentity> {
 
 #[cfg(windows)]
 pub fn current_file_identity(path: &Path) -> Result<FileIdentity> {
-    use std::os::windows::fs::MetadataExt;
     let meta = std::fs::metadata(path)
         .with_context(|| format!("failed to stat path: {}", path.display()))?;
-    let inode = ((meta.file_index_high() as u64) << 32) | (meta.file_index_low() as u64);
+    let canonical = path.canonicalize()
+        .with_context(|| format!("failed to canonicalize path: {}", path.display()))?;
+    let mut hash: u64 = 1469598103934665603;
+    for b in canonical.to_string_lossy().as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
     Ok(FileIdentity {
-        dev: meta.volume_serial_number().unwrap_or(0) as u64,
-        inode,
+        dev: 0,
+        inode: hash,
     })
 }
 

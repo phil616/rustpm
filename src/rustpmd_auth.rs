@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn allow_web_write_to_daemon_config() {
-        let base = PathBuf::from("/tmp/rustpm-policy-basic-allow");
+        let base = std::env::temp_dir().join("rustpm-policy-basic-allow");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("programs.d")).expect("mkdir");
         fs::write(base.join("rustpmd.conf"), "[web]\n").expect("write daemon");

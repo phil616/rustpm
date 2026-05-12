@@ -144,11 +144,34 @@ async fn spawn_service(svc: &ServiceConfig) -> Result<StartedService> {
         .ok_or_else(|| anyhow!("service {} started without pid", svc.name))?;
     let pgid = i32::try_from(pid_u32).with_context(|| format!("pid overflow for {}", svc.name))?;
 
+    #[cfg(windows)]
+    let job_handle = {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+        use windows::Win32::System::Threading::OpenProcess;
+        use windows::Win32::System::Threading::PROCESS_CREATE_PROCESS;
+
+        unsafe {
+            match CreateJobObjectW(None, None) {
+                Ok(job) => {
+                    if let Ok(proc_handle) = OpenProcess(PROCESS_CREATE_PROCESS, false, pid_u32) {
+                        AssignProcessToJobObject(job, proc_handle).ok();
+                        CloseHandle(proc_handle);
+                    }
+                    job.0 as usize
+                }
+                Err(_) => 0,
+            }
+        }
+    };
+
     Ok(StartedService {
         child: RunningChild {
             child,
             pgid,
             pid_u32,
+            #[cfg(windows)]
+            job_handle,
         },
         log_bindings,
     })

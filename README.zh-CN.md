@@ -19,7 +19,7 @@
 - [x] 在 macOS 上提供基于 `launchd` 引导 + `rustpm` 编排的稳定运行时。
 - [x] 提供服务粒度控制面（`rustpmctl` + Web 控制台）并落实权限边界。
 - [x] 配置模型参考 `supervisord` 风格并保持实用兼容性，降低迁移学习成本。
-- [ ] 支持 Windows 平台（设计目标）。
+- [x] 支持 Windows 平台（基于 Windows Service）。
 - [ ] 支持 OpenWrt 平台（设计目标）。
 
 ## 公开文档
@@ -65,9 +65,60 @@ sudo installer -pkg dist/rustpm-0.1.0-unsigned.pkg -target /
   - `/usr/local/etc/rustpm/programs.d` 权限 `700`（仅 root）
   - `programs.d/*.conf` 权限 `600`（仅 root）
 
-### Windows（规划中）
+### Windows（已支持）
 
-安装流程暂未发布。
+rustpm 作为 Windows Service 运行，由 Windows Service Control Manager 管理。
+
+前置条件：
+- Windows 10/11 或 Windows Server 2016+
+- 管理员权限（服务安装需要）
+
+MSI 安装（推荐）：
+
+```powershell
+# 构建 MSI（需要 WiX Toolset）
+.\scripts\build_msi.ps1
+
+# 双击 dist\rustpm-0.1.0-x64.msi 即可安装
+# Windows 会自动弹出 UAC 提权窗口。
+
+# 或命令行（必须在管理员 PowerShell 中运行）：
+msiexec /i dist\rustpm-0.1.0-x64.msi
+
+# 静默安装（必须在管理员 PowerShell 中运行）：
+msiexec /i dist\rustpm-0.1.0-x64.msi /quiet
+
+# 卸载：
+msiexec /x dist\rustpm-0.1.0-x64.msi
+```
+
+从源码构建（手动注册服务）：
+
+```powershell
+# 克隆并构建
+cargo build --release
+
+# 安装为 Windows Service
+rustpmd.exe install --config "C:\Program Files\rustpm\config\rustpmd.conf"
+```
+
+服务管理：
+
+```powershell
+# 启动服务
+Start-Service -Name rustpm
+
+# 查看状态
+Get-Service -Name rustpm
+
+# 停止服务
+Stop-Service -Name rustpm
+
+# 卸载服务
+rustpmd.exe uninstall
+```
+
+注意：安装/卸载命令必须以管理员身份运行。
 
 ### OpenWrt（规划中）
 
@@ -96,6 +147,13 @@ stdout_logfile_maxbytes = 50MB
 stdout_logfile_backups = 10
 stdout_logfile = /usr/local/var/log/%(program_name)s.log
 stderr_logfile = /usr/local/var/log/%(program_name)s-error.log
+```
+
+如果 macOS 的 `directory` 或 `command` 某一段包含空格，必须给该段加引号，例如：
+
+```ini
+directory = "/Users/alice/My Service"
+command = "/Users/alice/My Service/bin/example" -c "/Users/alice/My Service/config/example.config"
 ```
 
 支持键：
@@ -139,9 +197,81 @@ service_start_spin_interval_secs = 1
 Web 默认开启，默认密码为 `password`（生产环境建议立即修改）。
 详细安全与 API 行为请查看：[docs/security-api.zh-CN.md](docs/security-api.zh-CN.md)。
 
-### Windows（规划中）
+### Windows（已支持）
 
-配置格式与文件位置暂未发布。
+`rustpm` 配置语法是平台无关的；相同的 INI 格式在 macOS 和 Windows 上均可工作。
+
+默认位置：
+- 守护配置：`C:\Program Files\rustpm\config\rustpmd.conf`
+- 服务配置：`C:\Program Files\rustpm\config\programs.d\`
+- 日志目录：`C:\Program Files\rustpm\logs\`
+- IPC 管道：`\\.\pipe\rustpmd`
+- Privd 管道：`\\.\pipe\rustpm-privd`
+
+服务配置格式（`programs.d\*.conf`）：
+
+```ini
+[program:example]
+directory = C:\Users\admin\example
+command = C:\Users\admin\example\bin\example.exe -c C:\Users\admin\example\config.ini
+user = Administrator
+privilege = elevated
+startsecs = 3
+autorestart = true
+redirect_stderr = true
+stdout_logfile_maxbytes = 50MB
+stdout_logfile_backups = 10
+stdout_logfile = C:\Program Files\rustpm\logs\%(program_name)s.log
+stderr_logfile = C:\Program Files\rustpm\logs\%(program_name)s-error.log
+```
+
+如果 Windows 的命令路径或参数里包含空格（例如 `C:\Program Files\...`），
+必须给该段加引号，例如：
+
+```ini
+directory = "C:/Program Files/My Service"
+command = "C:/Program Files/My Service/myservice.exe" --config "C:/Program Files/My Service/config.ini"
+```
+
+支持的键（与 macOS 相同）：
+- `directory`
+- `command`
+- `user`：
+  - `Administrator` 等价于 `privilege=elevated`
+  - `privilege=normal` 时可指定非管理员本地账户
+- `privilege`（`normal` 或 `elevated`）
+- `startsecs`
+- `autorestart`
+- `redirect_stderr`
+- `stdout_logfile_maxbytes`
+- `stdout_logfile_backups`
+- `stdout_logfile`
+- `stderr_logfile`
+
+守护配置格式（`rustpmd.conf`）：
+
+```ini
+config_dir = C:\Program Files\rustpm\config\programs.d
+socket = \\.\pipe\rustpmd
+privd_socket = \\.\pipe\rustpm-privd
+
+[web]
+enabled = true
+bind = 127.0.0.1
+port = 18765
+expose = false
+password_hash = argon2id:<phc>
+
+[dependency]
+require_privd = true
+startup_timeout_secs = 30
+healthcheck_interval_secs = 5
+failure_threshold = 3
+service_start_delay_secs = 30
+service_start_spin_interval_secs = 1
+```
+
+默认密码为 `password`（生产环境建议立即修改）。
 
 ### OpenWrt（规划中）
 
@@ -218,9 +348,70 @@ sudo /usr/local/lib/rustpm/rustpmctl rescan
 sudo /usr/local/lib/rustpm/rustpmctl status easytier
 ```
 
-### Windows（规划中）
+### Windows（已支持）
 
-运行管理命令集暂未发布。
+使用 `rustpmctl` 进行服务控制：
+
+```powershell
+# 列出所有服务
+rustpmctl.exe list
+
+# 重新扫描发现新服务
+rustpmctl.exe rescan
+
+# 显示响应码
+rustpmctl.exe codes
+
+# 显示运行契约
+rustpmctl.exe contract
+
+# JSON 输出
+rustpmctl.exe --json list
+
+# 配置校验
+rustpmctl.exe check-config --config "C:\Program Files\rustpm\config\rustpmd.conf"
+
+# ping 守护进程
+rustpmctl.exe ping
+
+# 服务操作
+rustpmctl.exe status myservice
+rustpmctl.exe start myservice
+rustpmctl.exe stop myservice
+rustpmctl.exe restart myservice
+rustpmctl.exe reload myservice
+
+# 带配置校验的服务操作
+rustpmctl.exe restart myservice --check-config --config "C:\Program Files\rustpm\config\rustpmd.conf"
+```
+
+注意：
+- `rescan`：重新扫描 `programs.d` 发现新增服务。
+- `reload <service>`：仅重载该服务所属的配置文件。
+- `rustpmctl` 通过命名管道（`\\.\pipe\rustpmd`）与守护进程通信。
+
+创建托管服务：
+
+```powershell
+# 创建服务配置文件
+New-Item -ItemType File -Path "C:\Program Files\rustpm\config\programs.d\myservice.conf" -Value @"
+[program:myservice]
+directory = C:\Users\admin\myservice
+command = C:\Users\admin\myservice\myservice.exe
+privilege = normal
+startsecs = 3
+autorestart = true
+redirect_stderr = true
+stdout_logfile_maxbytes = 50MB
+stdout_logfile_backups = 10
+stdout_logfile = C:\Program Files\rustpm\logs\myservice.log
+stderr_logfile = C:\Program Files\rustpm\logs\myservice-error.log
+"@
+
+# 重启服务以加载新配置
+rustpmctl.exe rescan
+rustpmctl.exe restart myservice --check-config --config "C:\Program Files\rustpm\config\rustpmd.conf"
+```
 
 ### OpenWrt（规划中）
 
@@ -249,9 +440,41 @@ sudo tail -n 200 /usr/local/var/log/rustpm.err.log
 sudo tail -n 200 /usr/local/var/log/rustpm-privd.err.log
 ```
 
-### Windows（规划中）
+### Windows（已支持）
 
-诊断流程暂未发布。
+查看服务状态：
+
+```powershell
+# 服务状态
+Get-Service -Name rustpm
+
+# 详细服务信息
+sc query rustpm
+
+# 事件日志
+Get-EventLog -LogName Application -Source rustpm -Newest 50
+```
+
+服务/运行日志：
+
+```powershell
+# 查看最近日志条目
+Get-Content -Tail 200 "C:\Program Files\rustpm\logs\myservice.log"
+Get-Content -Tail 200 "C:\Program Files\rustpm\logs\myservice-error.log"
+Get-Content -Tail 200 "C:\Program Files\rustpm\logs\rustpm.log"
+Get-Content -Tail 200 "C:\Program Files\rustpm\logs\rustpm-privd.log"
+```
+
+调试模式（前台运行，用于故障排除）：
+
+```powershell
+# 前台运行（不作为服务）
+rustpmd.exe run --config "C:\Program Files\rustpm\config\rustpmd.conf"
+```
+
+服务恢复：
+- Windows Service Control Manager 会在故障时自动重启 rustpm。
+- 可通过 `sc failure` 命令配置恢复操作。
 
 ### OpenWrt（规划中）
 
@@ -289,9 +512,31 @@ sudo /usr/local/lib/rustpm/uninstall_rustpm.sh --yes
 - `/usr/local/var/run/rustpm`
 - `/usr/local/var/log` 下 rustpm 相关日志文件
 
-### Windows（规划中）
+### Windows（已支持）
 
-卸载流程暂未发布。
+推荐方式（交互式）：
+
+```powershell
+# 以管理员身份运行
+rustpmd.exe uninstall
+```
+
+这将：
+- 停止并删除 Windows Service
+- 不删除配置文件或日志（如需请手动清理）
+
+手动清理（如需要）：
+
+```powershell
+# 删除配置目录
+Remove-Item -Recurse -Force "C:\Program Files\rustpm\config"
+
+# 删除日志目录
+Remove-Item -Recurse -Force "C:\Program Files\rustpm\logs"
+
+# 删除安装目录
+Remove-Item -Recurse -Force "C:\Program Files\rustpm"
+```
 
 ### OpenWrt（规划中）
 

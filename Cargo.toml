@@ -16,8 +16,22 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "pro
 axum = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-nix = { version = "0.29", default-features = false, features = ["signal", "process", "user"] }
 shlex = "1"
 sha2 = "0.10"
 rand = "0.8"
 argon2 = "0.5"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", default-features = false, features = ["signal", "process", "user"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_IO",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Services",
+    "Win32_Networking_WinSock",
+] }

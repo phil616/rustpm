@@ -17,7 +17,7 @@ The motivation for developing `rustpm` comes from a practical issue: `launchctl`
 - [x] Stable macOS runtime based on `launchd` bootstrap + `rustpm` orchestration.
 - [x] Service-level control plane (`rustpmctl` + Web console) with explicit privilege boundary.
 - [x] Config model aligned with existing operator habits through `supervisord`-style syntax compatibility.
-- [ ] Windows platform support (design target).
+- [x] Windows platform support via Windows Service.
 - [ ] OpenWrt platform support (design target).
 
 ## Public docs
@@ -63,9 +63,60 @@ Installer defaults:
   - `/usr/local/etc/rustpm/programs.d` mode `700` (root-only)
   - `programs.d/*.conf` mode `600` (root-only)
 
-### Windows (planned)
+### Windows (supported)
 
-Installation workflow is not released yet.
+rustpm runs as a Windows Service managed by the Windows Service Control Manager.
+
+Prerequisites:
+- Windows 10/11 or Windows Server 2016+
+- Administrator privileges (required for service installation)
+
+Install from MSI (recommended):
+
+```powershell
+# Build MSI (requires WiX Toolset)
+.\scripts\build_msi.ps1
+
+# Double-click dist\rustpm-0.1.0-x64.msi to install
+# Windows will show UAC elevation prompt automatically.
+
+# Or command-line (must run from elevated/admin PowerShell):
+msiexec /i dist\rustpm-0.1.0-x64.msi
+
+# Silent install (must run from elevated/admin PowerShell):
+msiexec /i dist\rustpm-0.1.0-x64.msi /quiet
+
+# Uninstall:
+msiexec /x dist\rustpm-0.1.0-x64.msi
+```
+
+Build from source (with manual service registration):
+
+```powershell
+# Clone and build
+cargo build --release
+
+# Install as Windows Service
+rustpmd.exe install --config "C:\Program Files\rustpm\config\rustpmd.conf"
+```
+
+Service management:
+
+```powershell
+# Start the service
+Start-Service -Name rustpm
+
+# Check status
+Get-Service -Name rustpm
+
+# Stop the service
+Stop-Service -Name rustpm
+
+# Remove the service
+rustpmd.exe uninstall
+```
+
+Note: You must run the install/uninstall commands as Administrator.
 
 ### OpenWrt (planned)
 
@@ -94,6 +145,13 @@ stdout_logfile_maxbytes = 50MB
 stdout_logfile_backups = 10
 stdout_logfile = /usr/local/var/log/%(program_name)s.log
 stderr_logfile = /usr/local/var/log/%(program_name)s-error.log
+```
+
+If a macOS `directory` or `command` segment contains spaces, quote that segment, for example:
+
+```ini
+directory = "/Users/alice/My Service"
+command = "/Users/alice/My Service/bin/example" -c "/Users/alice/My Service/config/example.config"
 ```
 
 Supported keys:
@@ -137,9 +195,81 @@ service_start_spin_interval_secs = 1
 Web is enabled by default, with default password `password` (recommended to change immediately in production).
 Detailed security and API behavior: [docs/security-api.md](docs/security-api.md).
 
-### Windows (planned)
+### Windows (supported)
 
-Configuration format and file locations are not released yet.
+`rustpm` configuration syntax is platform-agnostic; the same INI format works across macOS and Windows.
+
+Default locations:
+- Daemon config: `C:\Program Files\rustpm\config\rustpmd.conf`
+- Programs config: `C:\Program Files\rustpm\config\programs.d\`
+- Logs: `C:\Program Files\rustpm\logs\`
+- IPC pipe: `\\.\pipe\rustpmd`
+- Privd pipe: `\\.\pipe\rustpm-privd`
+
+Program config format (`programs.d\*.conf`):
+
+```ini
+[program:example]
+directory = C:\Users\admin\example
+command = C:\Users\admin\example\bin\example.exe -c C:\Users\admin\example\config.ini
+user = Administrator
+privilege = elevated
+startsecs = 3
+autorestart = true
+redirect_stderr = true
+stdout_logfile_maxbytes = 50MB
+stdout_logfile_backups = 10
+stdout_logfile = C:\Program Files\rustpm\logs\%(program_name)s.log
+stderr_logfile = C:\Program Files\rustpm\logs\%(program_name)s-error.log
+```
+
+If a Windows command path or argument contains spaces (for example `C:\Program Files\...`),
+you must quote that segment, for example:
+
+```ini
+directory = "C:/Program Files/My Service"
+command = "C:/Program Files/My Service/myservice.exe" --config "C:/Program Files/My Service/config.ini"
+```
+
+Supported keys (same as macOS):
+- `directory`
+- `command`
+- `user`:
+  - `Administrator` is treated as `privilege=elevated`
+  - for `privilege=normal`, a local non-admin account can be specified
+- `privilege` (`normal` or `elevated`)
+- `startsecs`
+- `autorestart`
+- `redirect_stderr`
+- `stdout_logfile_maxbytes`
+- `stdout_logfile_backups`
+- `stdout_logfile`
+- `stderr_logfile`
+
+Daemon config format (`rustpmd.conf`):
+
+```ini
+config_dir = C:\Program Files\rustpm\config\programs.d
+socket = \\.\pipe\rustpmd
+privd_socket = \\.\pipe\rustpm-privd
+
+[web]
+enabled = true
+bind = 127.0.0.1
+port = 18765
+expose = false
+password_hash = argon2id:<phc>
+
+[dependency]
+require_privd = true
+startup_timeout_secs = 30
+healthcheck_interval_secs = 5
+failure_threshold = 3
+service_start_delay_secs = 30
+service_start_spin_interval_secs = 1
+```
+
+Default password is `password` (recommended to change immediately in production).
 
 ### OpenWrt (planned)
 
@@ -216,9 +346,70 @@ sudo /usr/local/lib/rustpm/rustpmctl rescan
 sudo /usr/local/lib/rustpm/rustpmctl status easytier
 ```
 
-### Windows (planned)
+### Windows (supported)
 
-Operational command set is not released yet.
+Service control with `rustpmctl`:
+
+```powershell
+# List all services
+rustpmctl.exe list
+
+# Rescan for new services
+rustpmctl.exe rescan
+
+# Show response codes
+rustpmctl.exe codes
+
+# Show runtime contract
+rustpmctl.exe contract
+
+# JSON output
+rustpmctl.exe --json list
+
+# Check configuration
+rustpmctl.exe check-config --config "C:\Program Files\rustpm\config\rustpmd.conf"
+
+# Ping the daemon
+rustpmctl.exe ping
+
+# Service operations
+rustpmctl.exe status myservice
+rustpmctl.exe start myservice
+rustpmctl.exe stop myservice
+rustpmctl.exe restart myservice
+rustpmctl.exe reload myservice
+
+# Service operations with config check
+rustpmctl.exe restart myservice --check-config --config "C:\Program Files\rustpm\config\rustpmd.conf"
+```
+
+Notes:
+- `rescan`: rescans `programs.d` to discover newly added services.
+- `reload <service>`: reloads only the config file that owns `<service>`.
+- `rustpmctl` communicates with the service via Named Pipe (`\\.\pipe\rustpmd`).
+
+Create a managed service:
+
+```powershell
+# Create service config file
+New-Item -ItemType File -Path "C:\Program Files\rustpm\config\programs.d\myservice.conf" -Value @"
+[program:myservice]
+directory = C:\Users\admin\myservice
+command = C:\Users\admin\myservice\myservice.exe
+privilege = normal
+startsecs = 3
+autorestart = true
+redirect_stderr = true
+stdout_logfile_maxbytes = 50MB
+stdout_logfile_backups = 10
+stdout_logfile = C:\Program Files\rustpm\logs\myservice.log
+stderr_logfile = C:\Program Files\rustpm\logs\myservice-error.log
+"@
+
+# Restart the service to pick up new config
+rustpmctl.exe rescan
+rustpmctl.exe restart myservice --check-config --config "C:\Program Files\rustpm\config\rustpmd.conf"
+```
 
 ### OpenWrt (planned)
 
@@ -247,9 +438,41 @@ sudo tail -n 200 /usr/local/var/log/rustpm.err.log
 sudo tail -n 200 /usr/local/var/log/rustpm-privd.err.log
 ```
 
-### Windows (planned)
+### Windows (supported)
 
-Diagnostic procedures are not released yet.
+Check service status:
+
+```powershell
+# Service status
+Get-Service -Name rustpm
+
+# Detailed service information
+sc query rustpm
+
+# Event logs
+Get-EventLog -LogName Application -Source rustpm -Newest 50
+```
+
+Service/runtime logs:
+
+```powershell
+# View recent log entries
+Get-Content -Tail 200 "C:\Program Files\rustpm\logs\myservice.log"
+Get-Content -Tail 200 "C:\Program Files\rustpm\logs\myservice-error.log"
+Get-Content -Tail 200 "C:\Program Files\rustpm\logs\rustpm.log"
+Get-Content -Tail 200 "C:\Program Files\rustpm\logs\rustpm-privd.log"
+```
+
+Debug mode (run in foreground for troubleshooting):
+
+```powershell
+# Run in foreground (not as service)
+rustpmd.exe run --config "C:\Program Files\rustpm\config\rustpmd.conf"
+```
+
+Service recovery:
+- Windows Service Control Manager automatically restarts rustpm on failure.
+- Recovery actions can be configured via `sc failure` command.
 
 ### OpenWrt (planned)
 
@@ -287,9 +510,31 @@ The uninstall script removes:
 - `/usr/local/var/run/rustpm`
 - rustpm log files under `/usr/local/var/log`
 
-### Windows (planned)
+### Windows (supported)
 
-Uninstall workflow is not released yet.
+Recommended (interactive):
+
+```powershell
+# Run as Administrator
+rustpmd.exe uninstall
+```
+
+This will:
+- Stop and remove the Windows Service
+- Not remove config files or logs (manual cleanup if needed)
+
+Manual cleanup (if needed):
+
+```powershell
+# Remove config directory
+Remove-Item -Recurse -Force "C:\Program Files\rustpm\config"
+
+# Remove logs directory
+Remove-Item -Recurse -Force "C:\Program Files\rustpm\logs"
+
+# Remove installation directory
+Remove-Item -Recurse -Force "C:\Program Files\rustpm"
+```
 
 ### OpenWrt (planned)
 

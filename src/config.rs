@@ -13,11 +13,32 @@ use nix::unistd::User;
 use crate::auth::{default_password_hash, is_hash_format};
 use crate::platform_fs;
 
+#[cfg(unix)]
 pub const DEFAULT_DAEMON_CONFIG_PATH: &str = "/usr/local/etc/rustpm/rustpmd.conf";
+#[cfg(unix)]
 pub const DEFAULT_CONFIG_DIR: &str = "/usr/local/etc/rustpm/programs.d";
+#[cfg(unix)]
 pub const SECURE_CONFIG_ROOT: &str = "/usr/local/etc/rustpm";
+#[cfg(unix)]
 pub const DEFAULT_SOCKET_PATH: &str = "/usr/local/var/run/rustpm/rustpmd.sock";
+#[cfg(unix)]
 pub const DEFAULT_PRIVD_SOCKET_PATH: &str = "/usr/local/var/run/rustpm/rustpm-privd.sock";
+#[cfg(unix)]
+pub const DEFAULT_LOG_DIR: &str = "/usr/local/var/log";
+
+#[cfg(windows)]
+pub const DEFAULT_DAEMON_CONFIG_PATH: &str = "C:\\Program Files\\rustpm\\config\\rustpmd.conf";
+#[cfg(windows)]
+pub const DEFAULT_CONFIG_DIR: &str = "C:\\Program Files\\rustpm\\config\\programs.d";
+#[cfg(windows)]
+pub const SECURE_CONFIG_ROOT: &str = "C:\\Program Files\\rustpm\\config";
+#[cfg(windows)]
+pub const DEFAULT_SOCKET_PATH: &str = "\\\\.\\pipe\\rustpmd";
+#[cfg(windows)]
+pub const DEFAULT_PRIVD_SOCKET_PATH: &str = "\\\\.\\pipe\\rustpm-privd";
+#[cfg(windows)]
+pub const DEFAULT_LOG_DIR: &str = "C:\\Program Files\\rustpm\\logs";
+
 pub const DEFAULT_WEB_BIND: &str = "127.0.0.1";
 pub const DEFAULT_WEB_PORT: u16 = 18765;
 pub const CONFIG_SCHEMA_V1: &str = "v1";
@@ -1344,6 +1365,24 @@ mod tests {
     use crate::auth::default_password_hash;
     use std::{fs, path::PathBuf};
 
+    fn test_temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("rustpm-test-{}", name))
+    }
+
+    fn test_cmd() -> String {
+        #[cfg(unix)]
+        { "/bin/sleep".into() }
+        #[cfg(windows)]
+        { "C:/Windows/System32/cmd.exe".into() }
+    }
+
+    fn test_cmd_with_arg(arg: &str) -> String {
+        #[cfg(unix)]
+        { format!("/bin/sleep {}", arg) }
+        #[cfg(windows)]
+        { format!("{test_cmd}", test_cmd = test_cmd()) }
+    }
+
     #[test]
     fn parse_bytes_units() {
         assert_eq!(parse_bytes("50MB").expect("parse"), 50 * 1024 * 1024);
@@ -1353,13 +1392,14 @@ mod tests {
 
     #[test]
     fn parse_program_file_works() {
-        let content = r#"
-[program:alpha]
-command=/bin/sleep 30
-directory=/tmp
-"#;
-        let path = PathBuf::from("/tmp/rustpm-parse-test.conf");
-        fs::write(&path, content).expect("write");
+        let cmd = test_cmd_with_arg("30");
+        let content = format!(
+            "[program:alpha]\ncommand={}\ndirectory={}\n",
+            cmd,
+            std::env::temp_dir().display()
+        );
+        let path = test_temp_dir("parse-test.conf");
+        fs::write(&path, &content).expect("write");
         let (services, warnings) = parse_program_file(path.as_path());
         fs::remove_file(&path).expect("remove");
         assert!(warnings.is_empty());
@@ -1369,14 +1409,13 @@ directory=/tmp
 
     #[test]
     fn user_root_implies_elevated_privilege() {
-        let content = r#"
-[program:svc]
-command=/bin/sleep 30
-directory=/tmp
-user=root
-"#;
-        let path = PathBuf::from("/tmp/rustpm-parse-root-elevated.conf");
-        fs::write(&path, content).expect("write");
+        let cmd = test_cmd_with_arg("30");
+        let td = std::env::temp_dir().display().to_string();
+        let content = format!(
+            "[program:svc]\ncommand={}\ndirectory={}\nuser=root\n", cmd, td
+        );
+        let path = test_temp_dir("parse-root-elevated.conf");
+        fs::write(&path, &content).expect("write");
         let (services, warnings) = parse_program_file(path.as_path());
         fs::remove_file(&path).expect("remove");
         assert!(warnings.is_empty());
@@ -1386,14 +1425,13 @@ user=root
 
     #[test]
     fn user_administrator_implies_elevated_privilege() {
-        let content = r#"
-[program:svc]
-command=/bin/sleep 30
-directory=/tmp
-user=Administrator
-"#;
-        let path = PathBuf::from("/tmp/rustpm-parse-admin-elevated.conf");
-        fs::write(&path, content).expect("write");
+        let cmd = test_cmd_with_arg("30");
+        let td = std::env::temp_dir().display().to_string();
+        let content = format!(
+            "[program:svc]\ncommand={}\ndirectory={}\nuser=Administrator\n", cmd, td
+        );
+        let path = test_temp_dir("parse-admin-elevated.conf");
+        fs::write(&path, &content).expect("write");
         let (services, warnings) = parse_program_file(path.as_path());
         fs::remove_file(&path).expect("remove");
         assert!(warnings.is_empty());
@@ -1403,15 +1441,13 @@ user=Administrator
 
     #[test]
     fn privilege_elevated_with_normal_user_must_fail() {
-        let content = r#"
-[program:svc]
-command=/bin/sleep 30
-directory=/tmp
-user=abc
-privilege=elevated
-"#;
-        let path = PathBuf::from("/tmp/rustpm-parse-invalid-elevated-user.conf");
-        fs::write(&path, content).expect("write");
+        let cmd = test_cmd_with_arg("30");
+        let td = std::env::temp_dir().display().to_string();
+        let content = format!(
+            "[program:svc]\ncommand={}\ndirectory={}\nuser=abc\nprivilege=elevated\n", cmd, td
+        );
+        let path = test_temp_dir("parse-invalid-elevated-user.conf");
+        fs::write(&path, &content).expect("write");
         let (services, warnings) = parse_program_file(path.as_path());
         fs::remove_file(&path).expect("remove");
         assert!(services.is_empty());
@@ -1420,13 +1456,13 @@ privilege=elevated
 
     #[test]
     fn invalid_service_name_must_fail() {
-        let content = r#"
-[program:../../evil]
-command=/bin/sleep 30
-directory=/tmp
-"#;
-        let path = PathBuf::from("/tmp/rustpm-parse-invalid-service-name.conf");
-        fs::write(&path, content).expect("write");
+        let cmd = test_cmd_with_arg("30");
+        let td = std::env::temp_dir().display().to_string();
+        let content = format!(
+            "[program:../../evil]\ncommand={}\ndirectory={}\n", cmd, td
+        );
+        let path = test_temp_dir("parse-invalid-service-name.conf");
+        fs::write(&path, &content).expect("write");
         let (services, warnings) = parse_program_file(path.as_path());
         fs::remove_file(&path).expect("remove");
         assert!(services.is_empty());
@@ -1435,14 +1471,13 @@ directory=/tmp
 
     #[test]
     fn unsupported_program_key_must_fail() {
-        let content = r#"
-[program:svc]
-command=/bin/sleep 30
-directory=/tmp
-environment=FOO=BAR
-"#;
-        let path = PathBuf::from("/tmp/rustpm-parse-unsupported-key.conf");
-        fs::write(&path, content).expect("write");
+        let cmd = test_cmd_with_arg("30");
+        let td = std::env::temp_dir().display().to_string();
+        let content = format!(
+            "[program:svc]\ncommand={}\ndirectory={}\nenvironment=FOO=BAR\n", cmd, td
+        );
+        let path = test_temp_dir("parse-unsupported-key.conf");
+        fs::write(&path, &content).expect("write");
         let (services, warnings) = parse_program_file(path.as_path());
         fs::remove_file(&path).expect("remove");
         assert!(services.is_empty());
@@ -1457,7 +1492,7 @@ environment=FOO=BAR
             return;
         }
 
-        let base = PathBuf::from("/tmp/rustpm-runtime-elevated-owner");
+        let base = test_temp_dir("elevated-owner");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("programs.d")).expect("mkdir");
         fs::write(
@@ -1494,7 +1529,7 @@ environment=FOO=BAR
             return;
         }
 
-        let base = PathBuf::from("/tmp/rustpm-runtime-elevated-working-dir");
+        let base = test_temp_dir("elevated-working-dir");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("programs.d")).expect("mkdir");
         fs::write(
@@ -1517,7 +1552,7 @@ environment=FOO=BAR
     #[cfg(unix)]
     #[test]
     fn normal_service_rejects_root_owned_working_dir() {
-        let base = PathBuf::from("/tmp/rustpm-runtime-normal-root-working-dir");
+        let base = test_temp_dir("normal-root-working-dir");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("programs.d")).expect("mkdir");
         fs::write(
@@ -1542,15 +1577,18 @@ environment=FOO=BAR
 
     #[test]
     fn web_expose_must_be_explicit_for_non_localhost() {
-        let base = PathBuf::from("/tmp/rustpm-runtime-test");
+        let base = test_temp_dir("web-expose");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("programs.d")).expect("mkdir");
-        fs::create_dir_all(base.join("workdir")).expect("mkdir workdir");
+        let wd = base.join("workdir");
+        fs::create_dir_all(&wd).expect("mkdir workdir");
+        let cmd = test_cmd_with_arg("5");
         fs::write(
             base.join("programs.d/app.conf"),
             format!(
-                "[program:app]\ncommand=/bin/sleep 5\ndirectory={}\n",
-                base.join("workdir").display()
+                "[program:app]\ncommand={}\ndirectory={}\n",
+                cmd,
+                wd.display()
             ),
         )
         .expect("write program");
@@ -1573,15 +1611,18 @@ environment=FOO=BAR
 
     #[test]
     fn dependency_bounds_are_validated() {
-        let base = PathBuf::from("/tmp/rustpm-runtime-test-dep");
+        let base = test_temp_dir("runtime-test-dep");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("programs.d")).expect("mkdir");
-        fs::create_dir_all(base.join("workdir")).expect("mkdir workdir");
+        let wd = base.join("workdir");
+        fs::create_dir_all(&wd).expect("mkdir workdir");
+        let cmd = test_cmd_with_arg("5");
         fs::write(
             base.join("programs.d/app.conf"),
             format!(
-                "[program:app]\ncommand=/bin/sleep 5\ndirectory={}\n",
-                base.join("workdir").display()
+                "[program:app]\ncommand={}\ndirectory={}\n",
+                cmd,
+                wd.display()
             ),
         )
         .expect("write program");
@@ -1636,7 +1677,7 @@ environment=FOO=BAR
 
     #[test]
     fn empty_program_config_dir_is_allowed() {
-        let base = PathBuf::from("/tmp/rustpm-runtime-empty-programs");
+        let base = test_temp_dir("empty-programs");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("programs.d")).expect("mkdir");
         fs::write(
@@ -1661,15 +1702,18 @@ environment=FOO=BAR
 
     #[test]
     fn config_envelope_uses_v1_schema_for_check_mode() {
-        let base = PathBuf::from("/tmp/rustpm-runtime-schema-check");
+        let base = test_temp_dir("schema-check");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("programs.d")).expect("mkdir");
-        fs::create_dir_all(base.join("workdir")).expect("mkdir workdir");
+        let wd = base.join("workdir");
+        fs::create_dir_all(&wd).expect("mkdir workdir");
+        let cmd = test_cmd_with_arg("5");
         fs::write(
             base.join("programs.d/app.conf"),
             format!(
-                "[program:app]\ncommand=/bin/sleep 5\ndirectory={}\n",
-                base.join("workdir").display()
+                "[program:app]\ncommand={}\ndirectory={}\n",
+                cmd,
+                wd.display()
             ),
         )
         .expect("write program");
@@ -1689,15 +1733,18 @@ environment=FOO=BAR
 
     #[test]
     fn config_envelope_uses_v1_schema_for_run_mode() {
-        let base = PathBuf::from("/tmp/rustpm-runtime-schema-run");
+        let base = test_temp_dir("schema-run");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("programs.d")).expect("mkdir");
-        fs::create_dir_all(base.join("workdir")).expect("mkdir workdir");
+        let wd = base.join("workdir");
+        fs::create_dir_all(&wd).expect("mkdir workdir");
+        let cmd = test_cmd_with_arg("5");
         fs::write(
             base.join("programs.d/app.conf"),
             format!(
-                "[program:app]\ncommand=/bin/sleep 5\ndirectory={}\n",
-                base.join("workdir").display()
+                "[program:app]\ncommand={}\ndirectory={}\n",
+                cmd,
+                wd.display()
             ),
         )
         .expect("write program");
@@ -1729,7 +1776,7 @@ environment=FOO=BAR
 
     #[test]
     fn plain_web_password_is_rejected() {
-        let base = PathBuf::from("/tmp/rustpm-runtime-plain-password");
+        let base = test_temp_dir("plain-password");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("programs.d")).expect("mkdir");
         fs::write(

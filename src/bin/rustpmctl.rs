@@ -6,16 +6,20 @@ use rustpm::config::{default_daemon_config_path, load_runtime_config};
 use rustpm::ipc::{ControlRequest, ControlResponse, ServiceView};
 use rustpm::web_api::response_code_docs;
 use serde::Serialize;
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::UnixStream,
-};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
+use tokio::net::UnixStream;
+
+#[cfg(unix)]
+const DEFAULT_SOCKET: &str = "/usr/local/var/run/rustpm/rustpmd.sock";
+#[cfg(windows)]
+const DEFAULT_SOCKET: &str = "\\\\.\\pipe\\rustpmd";
 
 #[derive(Parser, Debug)]
 #[command(name = "rustpmctl", about = "Control rustpmd managed services")]
 struct Cli {
-    /// Unix socket path for rustpmd control channel.
-    #[arg(long, default_value = "/usr/local/var/run/rustpm/rustpmd.sock")]
+    /// Socket/pipe path for rustpmd control channel.
+    #[arg(long, default_value = DEFAULT_SOCKET)]
     socket: PathBuf,
     /// Print machine-readable JSON output.
     #[arg(long, global = true, default_value_t = false)]
@@ -125,30 +129,58 @@ async fn main() -> Result<()> {
 }
 
 async fn send_request(socket: &PathBuf, req: ControlRequest) -> Result<ControlResponse> {
-    let stream = UnixStream::connect(socket)
-        .await
-        .with_context(|| format!("failed to connect socket {}", socket.display()))?;
-    let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
-
-    let mut payload = serde_json::to_string(&req).context("failed to encode request")?;
-    payload.push('\n');
-    writer
-        .write_all(payload.as_bytes())
-        .await
-        .context("failed to send request")?;
-
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .await
-        .context("failed to read response")?;
-    if line.trim().is_empty() {
-        return Err(anyhow!("empty response from rustpmd"));
+    #[cfg(unix)]
+    {
+        let stream = UnixStream::connect(socket)
+            .await
+            .with_context(|| format!("failed to connect socket {}", socket.display()))?;
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+        let mut payload = serde_json::to_string(&req).context("failed to encode request")?;
+        payload.push('\n');
+        writer
+            .write_all(payload.as_bytes())
+            .await
+            .context("failed to send request")?;
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .await
+            .context("failed to read response")?;
+        if line.trim().is_empty() {
+            return Err(anyhow!("empty response from rustpmd"));
+        }
+        let resp = serde_json::from_str::<ControlResponse>(line.trim()).context("failed to decode response")?;
+        Ok(resp)
     }
 
-    let resp = serde_json::from_str::<ControlResponse>(line.trim()).context("failed to decode response")?;
-    Ok(resp)
+    #[cfg(not(unix))]
+    {
+        use tokio::net::windows::named_pipe::ClientOptions;
+        let pipe_name = socket.to_str()
+            .ok_or_else(|| anyhow!("invalid pipe path: {}", socket.display()))?;
+        let client = ClientOptions::new()
+            .open(pipe_name)
+            .with_context(|| format!("failed to connect to {}", pipe_name))?;
+        let (reader, mut writer) = tokio::io::split(client);
+        let mut reader = BufReader::new(reader);
+        let mut payload = serde_json::to_string(&req).context("failed to encode request")?;
+        payload.push('\n');
+        writer
+            .write_all(payload.as_bytes())
+            .await
+            .context("failed to send request")?;
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .await
+            .context("failed to read response")?;
+        if line.trim().is_empty() {
+            return Err(anyhow!("empty response from rustpmd"));
+        }
+        let resp = serde_json::from_str::<ControlResponse>(line.trim()).context("failed to decode response")?;
+        Ok(resp)
+    }
 }
 
 fn print_response(resp: &ControlResponse, as_json: bool) -> Result<()> {

@@ -3,10 +3,14 @@ use std::{path::Path, path::PathBuf, time::Duration};
 use anyhow::{anyhow, Context, Result};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::UnixStream,
+    process::Command,
     sync::mpsc,
     time::{sleep, timeout, Instant},
 };
+
+#[cfg(unix)]
+use tokio::net::UnixStream;
+
 use tracing::{info, warn};
 
 use crate::ipc::{ControlRequest, ControlResponse, ResponseCode, RuntimeContractView};
@@ -211,40 +215,82 @@ async fn forward_result(privd_socket: &Path, req: ControlRequest) -> ControlResp
 }
 
 async fn forward_to_privd(privd_socket: &Path, req: ControlRequest) -> Result<ControlResponse> {
-    let op = async {
-        let stream = UnixStream::connect(privd_socket)
-            .await
-            .with_context(|| format!("failed to connect priv socket {}", privd_socket.display()))?;
-        let (reader, mut writer) = stream.into_split();
-        let reader = BufReader::new(reader);
+    #[cfg(not(unix))]
+    {
+        use tokio::net::windows::named_pipe::ClientOptions;
+        let pipe_name = privd_socket.to_str()
+            .ok_or_else(|| anyhow!("invalid priv pipe path: {}", privd_socket.display()))?;
+        let op = async {
+            let stream = ClientOptions::new()
+                .open(pipe_name)
+                .with_context(|| format!("failed to connect priv pipe {}", pipe_name))?;
+            let (reader, mut writer) = tokio::io::split(stream);
+            let reader = BufReader::new(reader);
+            let mut payload = serde_json::to_string(&req).context("failed to encode priv request")?;
+            payload.push('\n');
+            writer
+                .write_all(payload.as_bytes())
+                .await
+                .context("failed to write priv request")?;
+            let mut line = String::new();
+            let mut limited_reader = reader.take((crate::ipc::MAX_CONTROL_MESSAGE_BYTES + 1) as u64);
+            limited_reader
+                .read_line(&mut line)
+                .await
+                .context("failed to read priv response")?;
+            if line.len() > crate::ipc::MAX_CONTROL_MESSAGE_BYTES {
+                return Err(anyhow!(
+                    "priv response too large (>{} bytes)",
+                    crate::ipc::MAX_CONTROL_MESSAGE_BYTES
+                ));
+            }
+            if line.trim().is_empty() {
+                return Err(anyhow!("empty response from priv-helper"));
+            }
+            serde_json::from_str(line.trim()).context("failed to decode priv response")
+        };
 
-        let mut payload = serde_json::to_string(&req).context("failed to encode priv request")?;
-        payload.push('\n');
-        writer
-            .write_all(payload.as_bytes())
+        timeout(Duration::from_secs(2), op)
             .await
-            .context("failed to write priv request")?;
-        let mut line = String::new();
-        let mut limited_reader = reader.take((crate::ipc::MAX_CONTROL_MESSAGE_BYTES + 1) as u64);
-        limited_reader
-            .read_line(&mut line)
-            .await
-            .context("failed to read priv response")?;
-        if line.len() > crate::ipc::MAX_CONTROL_MESSAGE_BYTES {
-            return Err(anyhow!(
-                "priv response too large (>{} bytes)",
-                crate::ipc::MAX_CONTROL_MESSAGE_BYTES
-            ));
-        }
-        if line.trim().is_empty() {
-            return Err(anyhow!("empty response from priv-helper"));
-        }
-        serde_json::from_str(line.trim()).context("failed to decode priv response")
-    };
+            .with_context(|| format!("priv-helper request timeout via {}", pipe_name))?
+    }
 
-    timeout(Duration::from_secs(2), op)
-        .await
-        .with_context(|| format!("priv-helper request timeout via {}", privd_socket.display()))?
+    #[cfg(unix)]
+    {
+        let op = async {
+            let stream = UnixStream::connect(privd_socket)
+                .await
+                .with_context(|| format!("failed to connect priv socket {}", privd_socket.display()))?;
+            let (reader, mut writer) = stream.into_split();
+            let reader = BufReader::new(reader);
+            let mut payload = serde_json::to_string(&req).context("failed to encode priv request")?;
+            payload.push('\n');
+            writer
+                .write_all(payload.as_bytes())
+                .await
+                .context("failed to write priv request")?;
+            let mut line = String::new();
+            let mut limited_reader = reader.take((crate::ipc::MAX_CONTROL_MESSAGE_BYTES + 1) as u64);
+            limited_reader
+                .read_line(&mut line)
+                .await
+                .context("failed to read priv response")?;
+            if line.len() > crate::ipc::MAX_CONTROL_MESSAGE_BYTES {
+                return Err(anyhow!(
+                    "priv response too large (>{} bytes)",
+                    crate::ipc::MAX_CONTROL_MESSAGE_BYTES
+                ));
+            }
+            if line.trim().is_empty() {
+                return Err(anyhow!("empty response from priv-helper"));
+            }
+            serde_json::from_str(line.trim()).context("failed to decode priv response")
+        };
+
+        timeout(Duration::from_secs(2), op)
+            .await
+            .with_context(|| format!("priv-helper request timeout via {}", privd_socket.display()))?
+    }
 }
 
 pub(super) async fn wait_for_privd_ready(privd_socket: &Path, startup_timeout_secs: u64) -> Result<()> {
@@ -309,6 +355,23 @@ pub(super) async fn monitor_privd_health(
                     "priv-helper health check failed"
                 );
                 if failures >= failure_threshold {
+                    match attempt_privd_recovery(&privd_socket).await {
+                        Ok(()) => {
+                            info!(
+                                socket = %privd_socket.display(),
+                                "priv-helper recovery succeeded"
+                            );
+                            failures = 0;
+                            continue;
+                        }
+                        Err(recover_err) => {
+                            warn!(
+                                socket = %privd_socket.display(),
+                                error = %recover_err,
+                                "priv-helper recovery failed"
+                            );
+                        }
+                    }
                     let _ = fatal_tx
                         .send(format!(
                             "priv-helper unreachable after {} failures: {}",
@@ -319,5 +382,35 @@ pub(super) async fn monitor_privd_health(
                 }
             }
         }
+    }
+}
+
+async fn attempt_privd_recovery(privd_socket: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let status = Command::new("launchctl")
+            .args(["kickstart", "-k", "system/club.motofans.rustpm-privd"])
+            .status()
+            .await
+            .context("failed to execute launchctl kickstart for priv-helper")?;
+        if !status.success() {
+            return Err(anyhow!(
+                "launchctl kickstart failed for priv-helper with status {}",
+                status
+            ));
+        }
+        wait_for_privd_ready(privd_socket, 15).await?;
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        // TODO(windows-recovery): add parity with Unix recovery path.
+        // Suggested implementation:
+        // 1) query/restart rustpm-privd Windows service via SCM APIs
+        // 2) wait for named-pipe readiness with a bounded timeout
+        // 3) keep fatal fallback if recovery attempt fails
+        let _ = privd_socket;
+        Err(anyhow!("automatic priv-helper recovery is not implemented on this platform"))
     }
 }

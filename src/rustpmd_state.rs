@@ -36,6 +36,8 @@ pub(super) struct RunningChild {
     pub(super) child: Child,
     pub(super) pgid: i32,
     pub(super) pid_u32: u32,
+    #[cfg(windows)]
+    pub(super) job_handle: usize,
 }
 
 pub(super) struct StartedService {

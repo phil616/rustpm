@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod config;
 pub mod ipc;
+pub mod platform;
 pub mod platform_fs;
 pub mod runtime_contract;
 pub mod runtime_policy;
