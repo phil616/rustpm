@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use tracing::info;
+
 #[derive(Parser, Debug)]
 #[command(name = "rustpm-privd", about = "Privileged helper daemon for rustpm")]
 struct Cli {

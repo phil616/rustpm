@@ -91,8 +91,7 @@ pub(super) fn ensure_service_log_file(path: &Path) -> Result<LogBinding> {
 
 pub(super) fn canonicalize_allowed_log_path_impl(path: &Path) -> Result<PathBuf> {
     let fs_policy = platform_fs::default_policy_adapter();
-    let root = Path::new(LOG_ROOT)
-        .canonicalize()
+    let root = platform_fs::canonicalize(Path::new(LOG_ROOT))
         .with_context(|| format!("failed to canonicalize log root: {}", LOG_ROOT))?;
     fs_policy.canonicalize_under(&root, path)
 }

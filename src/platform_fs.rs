@@ -95,10 +95,30 @@ pub fn capabilities() -> PlatformCapabilities {
     }
 }
 
-pub fn canonicalize_under(root: &Path, path: &Path) -> Result<PathBuf> {
-    let canonical = path
+fn strip_extended_prefix(path: PathBuf) -> PathBuf {
+    let s = path.to_string_lossy();
+    if s.starts_with("\\\\?\\") {
+        // \\?\C:\... → C:\...,  \\?\UNC\server\... → \\server\...
+        let trimmed = &s[4..];
+        if trimmed.starts_with("UNC\\") {
+            PathBuf::from(format!("\\{}", &trimmed[3..]))
+        } else {
+            PathBuf::from(trimmed)
+        }
+    } else {
+        path
+    }
+}
+
+pub fn canonicalize(path: &Path) -> Result<PathBuf> {
+    let c = path
         .canonicalize()
         .with_context(|| format!("failed to canonicalize path: {}", path.display()))?;
+    Ok(strip_extended_prefix(c))
+}
+
+pub fn canonicalize_under(root: &Path, path: &Path) -> Result<PathBuf> {
+    let canonical = canonicalize(path)?;
     if !canonical.starts_with(root) {
         return Err(anyhow!(
             "log path is outside allowed root {}: {}",
@@ -124,8 +144,7 @@ pub fn current_file_identity(path: &Path) -> Result<FileIdentity> {
 pub fn current_file_identity(path: &Path) -> Result<FileIdentity> {
     let _meta = std::fs::metadata(path)
         .with_context(|| format!("failed to stat path: {}", path.display()))?;
-    let canonical = path.canonicalize()
-        .with_context(|| format!("failed to canonicalize path: {}", path.display()))?;
+    let canonical = canonicalize(path)?;
     let mut hash: u64 = 1469598103934665603;
     for b in canonical.to_string_lossy().as_bytes() {
         hash ^= *b as u64;
@@ -139,9 +158,7 @@ pub fn current_file_identity(path: &Path) -> Result<FileIdentity> {
 
 #[cfg(all(not(unix), not(windows)))]
 pub fn current_file_identity(path: &Path) -> Result<FileIdentity> {
-    let canonical = path
-        .canonicalize()
-        .with_context(|| format!("failed to canonicalize path: {}", path.display()))?;
+    let canonical = canonicalize(path)?;
     let mut hash: u64 = 1469598103934665603;
     for b in canonical.to_string_lossy().as_bytes() {
         hash ^= *b as u64;
