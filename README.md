@@ -8,16 +8,14 @@ This document is user-facing: installation, configuration, operations, diagnosti
 
 ## Why develop rustpm
 
-The motivation for developing `rustpm` comes from a practical issue: `launchctl` is powerful but difficult for daily service operations.
-
-`rustpm` keeps Apple-native bootstrap behavior while providing a cleaner service-management workflow for everyday use.
+`rustpm` provides a consistent service-management workflow across platforms while integrating with each OS-native bootstrap mechanism.
 
 ## Project goals
 
-- [x] Stable macOS runtime based on `launchd` bootstrap + `rustpm` orchestration.
+- [x] Cross-platform runtime: macOS (`launchd` bootstrap) + Windows (SCM service).
 - [x] Service-level control plane (`rustpmctl` + Web console) with explicit privilege boundary.
 - [x] Config model aligned with existing operator habits through `supervisord`-style syntax compatibility.
-- [x] Windows platform support via Windows Service.
+- [x] Windows Service support via SCM integration.
 - [ ] OpenWrt platform support (design target).
 
 ## Public docs
@@ -112,11 +110,10 @@ Get-Service -Name rustpm
 # Stop the service
 Stop-Service -Name rustpm
 
-# Remove the service
-rustpmd.exe uninstall
+# Uninstall via Control Panel (Programs and Features)
+# or run the MSI uninstall:
+# msiexec /x C:\path\to\rustpm-<version>-x64.msi
 ```
-
-Note: You must run the install/uninstall commands as Administrator.
 
 ### OpenWrt (planned)
 
@@ -512,11 +509,12 @@ The uninstall script removes:
 
 ### Windows (supported)
 
-Recommended (interactive):
+Open **Control Panel → Programs and Features**, find **rustpm**, and click **Uninstall**.
+
+If you have the MSI file, you can also run:
 
 ```powershell
-# Run as Administrator
-rustpmd.exe uninstall
+msiexec /x C:\path\to\rustpm-<version>-x64.msi
 ```
 
 This will:

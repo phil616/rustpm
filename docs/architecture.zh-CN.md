@@ -2,47 +2,39 @@
 
 ## 动机
 
-这个项目起步于一个实际痛点：`launchctl` 很可靠，但在高频日常服务管理中不够顺手。
+`rustpm` 是一个跨平台进程管理器，对接各平台原生服务引导机制，提供友好的编排与控制层。
 
-`rustpm` 的目标是保留系统原生引导，同时提供更友好的编排与控制层。
+## 角色分工（平台无关）
 
-## macOS 角色分工（当前实现）
-
-- `launchd`：系统级引导与守护恢复。
+- **原生引导**（平台相关）：macOS 使用 `launchd`，Windows 使用 SCM。
 - `rustpmd`：服务编排与控制面。
 - `rustpm-privd`：受控高权限操作。
 
-该模型既遵循 Apple 体系，也保留了日常管理效率。
+各平台适配器保持相同的 `rustpmd` / `rustpm-privd` 职责边界和控制语义（`rescan`、`reload <service>`、`restart <service>`）。
 
-## 跨平台方向
+## 各平台目录布局
 
-当前生产实现以 macOS 为主。
-未来明确规划支持：
-
-- Windows
-- OpenWrt
-
-跨平台设计原则：
-- 保持 `rustpmd` / `rustpm-privd` 职责边界稳定。
-- 对接各平台原生服务引导机制，而不是替换它。
-- 尽量保持服务级控制语义一致（`rescan`、`reload <service>`、`restart <service>`）。
-
-## 目录布局
-
-### macOS（当前）
+### macOS
 
 - 二进制：`/usr/local/lib/rustpm/rustpmd`
 - 特权助手：`/usr/local/lib/rustpm/rustpm-privd`
 - 控制 CLI：`/usr/local/lib/rustpm/rustpmctl`
 - 守护配置：`/usr/local/etc/rustpm/rustpmd.conf`
 - 服务配置目录：`/usr/local/etc/rustpm/programs.d`
-- LaunchDaemon plist：`/Library/LaunchDaemons/club.motofans.rustpm.plist`
+- 引导：`/Library/LaunchDaemons/club.motofans.rustpm.plist`
 - 控制 socket：`/usr/local/var/run/rustpm/rustpmd.sock`
 - 日志：`/usr/local/var/log/rustpm.log`、`/usr/local/var/log/rustpm.err.log`
 
-### Windows（规划中）
+### Windows
 
-目录路径与服务集成点暂未发布。
+- 二进制：`C:\Program Files\rustpm\rustpmd.exe`
+- 特权助手：`C:\Program Files\rustpm\rustpm-privd.exe`
+- 控制 CLI：`C:\Program Files\rustpm\rustpmctl.exe`
+- 守护配置：`C:\Program Files\rustpm\config\rustpmd.conf`
+- 服务配置目录：`C:\Program Files\rustpm\config\programs.d`
+- 引导：Windows 服务（SCM）自动启动
+- 控制管道：`\\.\pipe\rustpmd`
+- 日志：`C:\ProgramData\rustpm\logs\`
 
 ### OpenWrt（规划中）
 

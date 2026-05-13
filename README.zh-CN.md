@@ -10,16 +10,14 @@
 
 ## 为什么开发 rustpm
 
-开发 `rustpm` 的动机来自一个实际问题：`launchctl` 很强大，但日常服务管理使用门槛较高。
-
-`rustpm` 在保持 Apple 原生引导方式的同时，提供了更适合日常管理的服务编排流程。
+`rustpm` 在跨平台范围内提供一致的服务管理工作流，同时对接各操作系统的原生服务引导机制。
 
 ## 项目目标
 
-- [x] 在 macOS 上提供基于 `launchd` 引导 + `rustpm` 编排的稳定运行时。
+- [x] 跨平台运行时：macOS（`launchd` 引导）+ Windows（SCM 服务）。
 - [x] 提供服务粒度控制面（`rustpmctl` + Web 控制台）并落实权限边界。
 - [x] 配置模型参考 `supervisord` 风格并保持实用兼容性，降低迁移学习成本。
-- [x] 支持 Windows 平台（基于 Windows Service）。
+- [x] Windows 服务支持（基于 SCM 集成）。
 - [ ] 支持 OpenWrt 平台（设计目标）。
 
 ## 公开文档
@@ -114,11 +112,10 @@ Get-Service -Name rustpm
 # 停止服务
 Stop-Service -Name rustpm
 
-# 卸载服务
-rustpmd.exe uninstall
+# 卸载请通过控制面板（程序和功能）
+# 或运行 MSI 卸载命令：
+# msiexec /x C:\path\to\rustpm-<version>-x64.msi
 ```
-
-注意：安装/卸载命令必须以管理员身份运行。
 
 ### OpenWrt（规划中）
 
@@ -514,11 +511,12 @@ sudo /usr/local/lib/rustpm/uninstall_rustpm.sh --yes
 
 ### Windows（已支持）
 
-推荐方式（交互式）：
+打开 **控制面板 → 程序和功能**，找到 **rustpm**，点击**卸载**。
+
+如果有 MSI 文件，也可运行：
 
 ```powershell
-# 以管理员身份运行
-rustpmd.exe uninstall
+msiexec /x C:\path\to\rustpm-<version>-x64.msi
 ```
 
 这将：
