@@ -172,17 +172,25 @@
       </Component>
     </ComponentGroup>
 
-    <!-- ====== Uninstall: force-kill running processes before ServiceControl ====== -->
+    <!-- ====== Uninstall: stop services before ServiceControl runs ======
+         Execute="deferred" runs in the elevated InstallExecuteSequence with
+         SYSTEM privileges (not in the un-elevated UI sequence), so the
+         kill/stop commands actually have permission to terminate the
+         system-level service processes. sc stop with a 3-second timeout
+         attempts a clean stop first; taskkill /F is the fallback for hung
+         processes. Combined, this avoids the "Configuring rustpm" hang
+         during Programs &amp; Features uninstall.
+    -->
     <CustomAction Id="KillRustpmd"
                   Directory="INSTALLFOLDER"
-                  ExeCommand="[SystemFolder]taskkill.exe /F /IM rustpmd.exe"
-                  Execute="firstSequence"
+                  ExeCommand="[SystemFolder]cmd.exe /c &quot;[SystemFolder]sc stop rustpm 3000 &amp; [SystemFolder]taskkill.exe /F /IM rustpmd.exe&quot;"
+                  Execute="deferred"
                   Impersonate="no"
                   Return="ignore" />
     <CustomAction Id="KillRustpmPrivd"
                   Directory="INSTALLFOLDER"
-                  ExeCommand="[SystemFolder]taskkill.exe /F /IM rustpm-privd.exe"
-                  Execute="firstSequence"
+                  ExeCommand="[SystemFolder]cmd.exe /c &quot;[SystemFolder]sc stop rustpm-privd 3000 &amp; [SystemFolder]taskkill.exe /F /IM rustpm-privd.exe&quot;"
+                  Execute="deferred"
                   Impersonate="no"
                   Return="ignore" />
 
