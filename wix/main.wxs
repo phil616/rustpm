@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?ifndef ProductVersion ?>
+    <?define ProductVersion = "0.1.0" ?>
+  <?endif ?>
+  <?ifndef BinaryDir ?>
+    <?define BinaryDir = "..\target\release" ?>
+  <?endif ?>
 
   <!-- ============================================================
        rustpm MSI Installer
@@ -10,15 +16,15 @@
 
        Double-click the .msi to install (UAC elevation prompt).
        Or command-line:
-         msiexec /i rustpm-0.1.1-x64.msi                    (GUI)
-         msiexec /i rustpm-0.1.1-x64.msi /quiet /norestart   (silent)
-         msiexec /x rustpm-0.1.1-x64.msi                     (uninstall)
-         msiexec /i rustpm-0.1.1-x64.msi /f                 (repair)
+         msiexec /i rustpm-0.1.0-x64.msi                    (GUI)
+         msiexec /i rustpm-0.1.0-x64.msi /quiet /norestart   (silent)
+         msiexec /x rustpm-0.1.0-x64.msi                     (uninstall)
+         msiexec /i rustpm-0.1.0-x64.msi /f                 (repair)
   ============================================================ -->
 
   <Package Name="rustpm"
            Manufacturer="rustpm"
-           Version="0.1.1"
+           Version="$(ProductVersion)"
            UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
            ProductCode="*"
            Scope="perMachine"
@@ -65,7 +71,7 @@
     <ComponentGroup Id="Binaries" Directory="INSTALLFOLDER">
       <!-- rustpmd service -->
       <Component Id="cmpRustpmdExe" Guid="{12345678-ABCD-4DEF-9012-34567890ABCD}">
-        <File Id="rustpmdExe" Source="..\target\release\rustpmd.exe" KeyPath="yes" />
+        <File Id="rustpmdExe" Source="$(BinaryDir)\rustpmd.exe" KeyPath="yes" />
         <ServiceInstall Id="RustpmService"
                         Name="rustpm"
                         DisplayName="rustpm"
@@ -87,7 +93,7 @@
 
       <!-- rustpm-privd service -->
       <Component Id="cmpRustpmPrivdExe" Guid="{72345678-ABCD-4DEF-9012-34567890ABCD}">
-        <File Id="rustpmPrivdExe" Source="..\target\release\rustpm-privd.exe" KeyPath="yes" />
+        <File Id="rustpmPrivdExe" Source="$(BinaryDir)\rustpm-privd.exe" KeyPath="yes" />
         <ServiceInstall Id="RustpmPrivdService"
                         Name="rustpm-privd"
                         DisplayName="rustpm-privd"
@@ -107,7 +113,7 @@
 
       <!-- rustpmctl (no service) -->
       <Component Id="cmpRustpmctlExe" Guid="{22345678-ABCD-4DEF-9012-34567890ABCD}">
-        <File Id="rustpmctlExe" Source="..\target\release\rustpmctl.exe" KeyPath="yes" />
+        <File Id="rustpmctlExe" Source="$(BinaryDir)\rustpmctl.exe" KeyPath="yes" />
       </Component>
     </ComponentGroup>
 
@@ -166,7 +172,7 @@
                          Value="[INSTALLFOLDER]"
                          Type="string" />
           <RegistryValue Name="Version"
-                         Value="0.1.1"
+                         Value="$(ProductVersion)"
                          Type="string" />
         </RegistryKey>
       </Component>

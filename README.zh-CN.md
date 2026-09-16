@@ -117,6 +117,23 @@ Stop-Service -Name rustpm
 # msiexec /x C:\path\to\rustpm-<version>-x64.msi
 ```
 
+### GitHub Releases（Windows amd64）
+
+[发布工作流](.github/workflows/release.yml) 只构建 Windows amd64 MSI，
+并上传到对应的 GitHub Release。`v0.1.0` 的产物为 `rustpm-0.1.0-x64.msi`。
+
+提交并推送工作流及打包修改后，推送版本标签即可触发：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+标签必须与 `Cargo.toml` 版本一致，MSI 内部版本和注册表版本也从该值读取。
+如需重跑已有标签，可打开 **Actions → Release Windows MSI → Run workflow**，
+默认标签为 `v0.1.0`。标签指向的提交必须包含上述打包修改。
+无需额外配置仓库 Secret，工作流使用具备 `contents: write` 权限的 `GITHUB_TOKEN` 发布。
+
 ### OpenWrt（规划中）
 
 安装流程暂未发布。

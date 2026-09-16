@@ -6,17 +6,19 @@
 #   Rust: https://rustup.rs/
 #
 # Quick WiX setup:
-#   Invoke-WebRequest "https://github.com/wixtoolset/wix/releases/download/v5.0.2/wix-cli-x64.msi" -OutFile "$env:TEMP\wix.msi"
-#   msiexec /i "$env:TEMP\wix.msi" /quiet
+#   dotnet tool install --global wix --version 5.0.2
 #
 # Usage:
 #   .\scripts\build_msi.ps1              # Build release MSI
 #   .\scripts\build_msi.ps1 -Debug       # Build debug MSI
 #   .\scripts\build_msi.ps1 -SkipBuild   # Skip cargo build
+#   .\scripts\build_msi.ps1 -Target x86_64-pc-windows-msvc # Explicit amd64 target
 
 param(
     [switch]$Debug,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [ValidateSet("x86_64-pc-windows-msvc")]
+    [string]$Target
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,7 +26,9 @@ $RepoRoot = Resolve-Path (Split-Path -Parent $PSScriptRoot)
 
 # ---- Version ----
 $version = (Get-Content "$RepoRoot\Cargo.toml" | Select-String '^version\s*=\s*"([^"]+)"').Matches.Groups[1].Value
-if (-not $version) { $version = "0.1.0" }
+if ($version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Cargo.toml must contain a numeric major.minor.patch MSI version."
+}
 Write-Host "Version: $version"
 
 # ---- Build Rust binaries ----
@@ -32,23 +36,34 @@ if (-not $SkipBuild) {
     Write-Host "Building Rust binaries..."
     Push-Location $RepoRoot
     try {
-        if ($Debug) {
-            cargo build
-        } else {
-            cargo build --release
+        $buildArgs = @("build", "--locked", "--bins")
+        if (-not $Debug) { $buildArgs += "--release" }
+        if ($Target) { $buildArgs += @("--target", $Target) }
+        & cargo @buildArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo build failed (exit code $LASTEXITCODE)"
         }
     } finally {
         Pop-Location
     }
 }
-$TargetDir = if ($Debug) { "target\debug" } else { "target\release" }
-
-if (-not (Test-Path "$RepoRoot\$TargetDir\rustpmd.exe")) {
-    throw "rustpmd.exe not found. Build first or use -SkipBuild."
+$buildProfile = if ($Debug) { "debug" } else { "release" }
+$targetRoot = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $RepoRoot "target" }
+if (-not [System.IO.Path]::IsPathRooted($targetRoot)) {
+    $targetRoot = Join-Path $RepoRoot $targetRoot
 }
+if ($Target) { $targetRoot = Join-Path $targetRoot $Target }
+$TargetDir = Join-Path $targetRoot $buildProfile
+
+foreach ($binary in @("rustpmd.exe", "rustpm-privd.exe", "rustpmctl.exe")) {
+    if (-not (Test-Path (Join-Path $TargetDir $binary))) {
+        throw "$binary not found in $TargetDir. Build first."
+    }
+}
+$TargetDir = (Resolve-Path $TargetDir).Path
 
 # ---- Locate WiX ----
-$wixExe = $null
+$wixExe = (Get-Command wix.exe -ErrorAction SilentlyContinue).Source
 $searchPaths = @(
     "wix",
     "$env:ProgramFiles\WiX Toolset v5.0\bin",
@@ -61,6 +76,7 @@ $searchPaths = @(
 )
 
 foreach ($p in $searchPaths) {
+    if ($wixExe) { break }
     $test = Join-Path $p "wix.exe"
     if (Test-Path $test) {
         $wixExe = $test
@@ -85,7 +101,7 @@ $msiFile = Join-Path $distDir "rustpm-$version-x64.msi"
 Write-Host "Building MSI..."
 Push-Location "$RepoRoot\wix"
 try {
-    & $wixExe build main.wxs -arch x64 -o $msiFile 2>&1
+    & $wixExe build main.wxs -arch x64 -d "ProductVersion=$version" -d "BinaryDir=$TargetDir" -o $msiFile 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "wix build failed (exit code $LASTEXITCODE)"
     }

@@ -115,6 +115,25 @@ Stop-Service -Name rustpm
 # msiexec /x C:\path\to\rustpm-<version>-x64.msi
 ```
 
+### GitHub Releases (Windows amd64)
+
+The [release workflow](.github/workflows/release.yml) builds only the Windows
+amd64 MSI and attaches it to the corresponding GitHub Release. For `v0.1.0`,
+the asset is `rustpm-0.1.0-x64.msi`.
+
+After committing and pushing the workflow and packaging changes, publish the tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The tag must match the version in `Cargo.toml`. The MSI product and registry
+versions are taken from the same value. To retry an existing tag, use
+**Actions → Release Windows MSI → Run workflow** (default tag: `v0.1.0`).
+The tagged commit must include the packaging changes. No additional repository
+secret is required; publication uses `GITHUB_TOKEN` with `contents: write`.
+
 ### OpenWrt (planned)
 
 Installation workflow is not released yet.
