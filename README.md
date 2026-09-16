@@ -128,9 +128,10 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The tag must match the version in `Cargo.toml`. The MSI product and registry
-versions are taken from the same value. To retry an existing tag, use
-**Actions → Release Windows MSI → Run workflow** (default tag: `v0.1.0`).
+The release tag sets the Cargo package, MSI product, and registry versions in
+the temporary CI checkout; dependency versions remain locked. To retry an existing tag, use
+**Actions → Release Windows MSI → Run workflow** (default tag: `v0.1.1`).
+Select the `main` branch to use the latest workflow fixes for an existing tag.
 The tagged commit must include the packaging changes. No additional repository
 secret is required; publication uses `GITHUB_TOKEN` with `contents: write`.
 

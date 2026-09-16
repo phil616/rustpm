@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag (must match Cargo.toml)
+        description: Existing release tag (sets the package and MSI version)
         required: true
-        default: v0.1.0
+        default: v0.1.1
         type: string
 
 permissions:
@@ -42,17 +42,35 @@ jobs:
           rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw "Rust toolchain installation failed" }
 
-      - name: Validate release version
+      - name: Set release version from tag
         id: version
         run: |
           if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
             throw "Release tag must have the form vMAJOR.MINOR.PATCH"
           }
+          $version = $env:RELEASE_TAG.Substring(1)
+          # Update only the root package in the disposable CI checkout. This
+          # also lets an existing tag be released using the repaired workflow.
+          $files = @{
+            'Cargo.toml' = '(?ms)(^\[package\].*?^version\s*=\s*")[^"]+'
+            'Cargo.lock' = '(?m)(^name = "rustpm"\r?\nversion = ")[^"]+'
+          }
+          foreach ($file in $files.Keys) {
+            $content = Get-Content $file -Raw
+            $pattern = [regex]::new($files[$file])
+            if ($pattern.Matches($content).Count -ne 1) {
+              throw "Expected exactly one rustpm version in $file"
+            }
+            $updated = $pattern.Replace($content, [System.Text.RegularExpressions.MatchEvaluator]{
+              param($match)
+              $match.Groups[1].Value + $version
+            })
+            Set-Content $file $updated -NoNewline -Encoding utf8
+          }
           $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw "Unable to read Cargo metadata" }
-          $version = ($metadata.packages | Where-Object name -eq 'rustpm').version
-          if ($env:RELEASE_TAG -ne "v$version") {
-            throw "Tag $env:RELEASE_TAG does not match Cargo.toml version $version"
+          if (($metadata.packages | Where-Object name -eq 'rustpm').version -ne $version) {
+            throw "Failed to set package version to $version"
           }
           "msi=dist/rustpm-$version-x64.msi" >> $env:GITHUB_OUTPUT
 

@@ -129,9 +129,10 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-标签必须与 `Cargo.toml` 版本一致，MSI 内部版本和注册表版本也从该值读取。
+CI 在临时检出目录中使用标签统一 Cargo 包版本、MSI 内部版本和注册表版本，依赖版本保持锁定。
 如需重跑已有标签，可打开 **Actions → Release Windows MSI → Run workflow**，
-默认标签为 `v0.1.0`。标签指向的提交必须包含上述打包修改。
+默认标签为 `v0.1.1`，选择 `main` 分支可用最新工作流修复重跑已有标签。
+标签指向的提交必须包含上述打包修改。
 无需额外配置仓库 Secret，工作流使用具备 `contents: write` 权限的 `GITHUB_TOKEN` 发布。
 
 ### OpenWrt（规划中）
