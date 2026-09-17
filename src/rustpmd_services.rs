@@ -104,8 +104,12 @@ async fn manage_service_actor(
 }
 
 async fn spawn_service(svc: &ServiceConfig) -> Result<StartedService> {
+    let environment = svc.environment.clone();
+    let environment = tokio::task::spawn_blocking(move || environment.resolve())
+        .await?
+        .map_err(|err| anyhow!("service '{}' environment: {}", svc.name, err))?;
     let mut cmd = Command::new(&svc.command);
-    cmd.args(&svc.args).stdin(Stdio::null());
+    cmd.args(&svc.args).envs(environment).stdin(Stdio::null());
     let log_bindings = apply_stdio(svc, &mut cmd)?;
     if let Some(dir) = &svc.working_dir {
         cmd.current_dir(dir);
@@ -124,12 +128,8 @@ async fn spawn_service(svc: &ServiceConfig) -> Result<StartedService> {
                 if let Some(identity) = &maybe_identity {
                     setgid(identity.gid)
                         .map_err(|e| std::io::Error::other(e.to_string()))?;
-                    let base_group = i32::try_from(identity.gid.as_raw())
-                        .map_err(|_| std::io::Error::other("gid out of range for initgroups"))?;
-                    let rc = nix::libc::initgroups(identity.username.as_ptr(), base_group);
-                    if rc != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
+                    nix::unistd::initgroups(identity.username.as_c_str(), identity.gid)
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
                     setuid(identity.uid)
                         .map_err(|e| std::io::Error::other(e.to_string()))?;
                 }
@@ -376,5 +376,91 @@ mod boundary_tests {
         assert!(!src.contains("\npub(super) async fn update_state("));
         assert!(!src.contains("\npub(super) async fn update_runtime_log_bindings("));
         assert!(src.contains("pub(super) struct ServicesFacade;"));
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+    use crate::environment::EnvironmentConfig;
+
+    // Run the same test executable as the managed process. This checks the
+    // actual spawn path on Unix and Windows without requiring an external shell.
+    #[test]
+    fn child_probe() {
+        let Some(path) = std::env::var_os("RUSTPM_ENV_TEST_OUTPUT") else {
+            return;
+        };
+        let output = serde_json::json!({
+            "value": std::env::var("RUSTPM_ENV_TEST_VALUE").ok(),
+            "literal": std::env::var("RUSTPM_ENV_TEST_LITERAL").ok(),
+            "empty": std::env::var("RUSTPM_ENV_TEST_EMPTY").ok(),
+            "inherited_path": std::env::var_os("PATH").is_some(),
+        });
+        fs::write(path, output.to_string()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn spawn_applies_environment_rereads_files_and_isolates_services() {
+        let dir = std::env::temp_dir().join(format!("rustpm-spawn-env-{}", rand::random::<u64>()));
+        fs::create_dir(&dir).unwrap();
+        let output = dir.join("output.json");
+        let file = dir.join("values.env");
+        let source = dir.join("service.conf");
+        let directives = vec![
+            ("environment".into(), format!("'RUSTPM_ENV_TEST_OUTPUT={}' RUSTPM_ENV_TEST_VALUE=inline RUSTPM_ENV_TEST_EMPTY= 'RUSTPM_ENV_TEST_LITERAL=$HOME $(whoami)'", output.display()), 1),
+            ("environment_file".into(), "values.env".into(), 2),
+        ];
+        let original_parent = std::env::var_os("RUSTPM_ENV_TEST_VALUE");
+        let mut svc: ServiceConfig = serde_json::from_value(serde_json::json!({
+            "name": "env-probe", "command": std::env::current_exe().unwrap(),
+            "args": ["--exact", "rustpmd::rustpmd_services::environment_tests::child_probe", "--nocapture"],
+        })).unwrap();
+        svc.environment = EnvironmentConfig::parse(&source, &directives, false).unwrap();
+        for value in ["first", "after-restart"] {
+            fs::write(&file, format!("RUSTPM_ENV_TEST_VALUE={value}")).unwrap();
+            let mut child = spawn_service(&svc).await.unwrap();
+            assert!(timeout(Duration::from_secs(15), child.child.child.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success());
+            let received: serde_json::Value =
+                serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+            assert_eq!(received["value"], value);
+            assert_eq!(received["literal"], "$HOME $(whoami)");
+            assert_eq!(received["empty"], "");
+            assert_eq!(
+                received["inherited_path"],
+                std::env::var_os("PATH").is_some()
+            );
+        }
+        svc.environment = EnvironmentConfig::parse(
+            &source,
+            &[(
+                "environment".into(),
+                format!("'RUSTPM_ENV_TEST_OUTPUT={}'", output.display()),
+                1,
+            )],
+            false,
+        )
+        .unwrap();
+        let mut child = spawn_service(&svc).await.unwrap();
+        assert!(timeout(Duration::from_secs(15), child.child.child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success());
+        let received: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(
+            received["value"],
+            serde_json::json!(original_parent.as_ref().and_then(|v| v.to_str()))
+        );
+        assert_eq!(std::env::var_os("RUSTPM_ENV_TEST_VALUE"), original_parent);
+        svc.environment = EnvironmentConfig::parse(&source, &directives, false).unwrap();
+        fs::remove_file(&file).unwrap();
+        assert!(spawn_service(&svc).await.is_err());
+        fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -7,7 +7,7 @@ OUT_DIR="$ROOT_DIR/dist"
 STAGE_DIR="$ROOT_DIR/target/pkg-root"
 SCRIPTS_DIR="$ROOT_DIR/packaging"
 BUILD_SCRIPT="$ROOT_DIR/scripts/cargo-local.sh"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.1.2}"
 ID="club.motofans.rustpm"
 PKG_PATH="$OUT_DIR/rustpm-${VERSION}-unsigned.pkg"
 

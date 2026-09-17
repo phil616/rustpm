@@ -11,6 +11,7 @@ use serde::Deserialize;
 use nix::unistd::User;
 
 use crate::auth::{default_password_hash, is_hash_format};
+use crate::environment::{EnvironmentConfig, EnvironmentDirective};
 #[cfg(unix)]
 use crate::platform_fs;
 
@@ -56,6 +57,8 @@ const ALLOWED_PROGRAM_KEYS: &[&str] = &[
     "stdout_logfile",
     "stderr_logfile",
     "privilege",
+    "environment",
+    "environment_file",
 ];
 
 #[derive(Debug, Clone)]
@@ -199,6 +202,8 @@ pub struct ServiceConfig {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
+    pub environment: EnvironmentConfig,
     pub working_dir: Option<PathBuf>,
     #[serde(default = "default_true")]
     pub autostart: bool,
@@ -588,6 +593,13 @@ pub fn load_program_service_entries(
             continue;
         }
         let (mut parsed, mut parse_warnings) = parse_program_file_entries(&file, parse_policy);
+        if strict_program_parse {
+            for entry in &parsed {
+                entry.service.environment.resolve().map_err(|err| {
+                    anyhow!("program '{}' environment: {}", entry.service.name, err)
+                })?;
+            }
+        }
         services.append(&mut parsed);
         warnings.append(&mut parse_warnings);
     }
@@ -627,6 +639,13 @@ pub fn load_program_services_from_file(path: &Path) -> Result<Vec<ProgramService
     }
     let services: Vec<ServiceConfig> = entries.iter().map(|entry| entry.service.clone()).collect();
     validate_services(&services)?;
+    // Validate before replacing an actor so a broken file does not stop the
+    // currently running service during reload.
+    for service in &services {
+        service.environment.resolve().map_err(|err| {
+            anyhow!("program '{}' environment: {}", service.name, err)
+        })?;
+    }
     Ok(entries)
 }
 
@@ -643,6 +662,7 @@ fn parse_program_file_entries(
 
     let mut sections: BTreeMap<String, HashMap<String, String>> = BTreeMap::new();
     let mut current_section: Option<String> = None;
+    let mut environment_directives: HashMap<String, Vec<EnvironmentDirective>> = HashMap::new();
     let mut warnings = Vec::new();
 
     for (idx, line) in raw.lines().enumerate() {
@@ -676,10 +696,22 @@ fn parse_program_file_entries(
             ));
             return (Vec::new(), warnings);
         };
+        let key = key.trim().to_ascii_lowercase();
+        let key = if key == "environmentfile" {
+            "environment_file".to_string()
+        } else {
+            key
+        };
+        if key == "environment" || key == "environment_file" {
+            environment_directives
+                .entry(section_name.clone())
+                .or_default()
+                .push((key.clone(), value.trim().to_string(), lnum));
+        }
         sections
             .entry(section_name)
             .or_default()
-            .insert(key.trim().to_lowercase(), value.trim().to_string());
+            .insert(key, value.trim().to_string());
     }
 
     let mut out = Vec::new();
@@ -687,7 +719,11 @@ fn parse_program_file_entries(
         let Some(name) = section.strip_prefix("program:") else {
             continue;
         };
-        match build_service_config(path, name.trim(), &kv, parse_policy) {
+        let directives = environment_directives
+            .get(&section)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        match build_service_config(path, name.trim(), &kv, directives, parse_policy) {
             Ok(svc) => out.push(ProgramServiceEntry {
                 service: svc,
                 source_path: path.to_path_buf(),
@@ -711,6 +747,7 @@ fn build_service_config(
     source_path: &Path,
     program_name: &str,
     kv: &HashMap<String, String>,
+    environment_directives: &[EnvironmentDirective],
     parse_policy: ProgramParsePolicy,
 ) -> Result<ServiceConfig> {
     if program_name.is_empty() {
@@ -786,6 +823,11 @@ fn build_service_config(
         name: program_name.to_string(),
         command,
         args,
+        environment: EnvironmentConfig::parse(
+            source_path,
+            environment_directives,
+            privilege == PrivilegeMode::Elevated,
+        )?,
         working_dir: directory,
         autostart: true,
         start_secs,
@@ -1478,7 +1520,7 @@ mod tests {
         let cmd = test_cmd_with_arg("30");
         let td = std::env::temp_dir().display().to_string();
         let content = format!(
-            "[program:svc]\ncommand={}\ndirectory={}\nenvironment=FOO=BAR\n", cmd, td
+            "[program:svc]\ncommand={}\ndirectory={}\nunknown_setting=FOO=BAR\n", cmd, td
         );
         let path = test_temp_dir("parse-unsupported-key.conf");
         fs::write(&path, &content).expect("write");
@@ -1802,5 +1844,87 @@ mod tests {
         assert!(err.to_string().contains("plain web password is not supported"));
 
         let _ = fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("rustpm-config-env-{}", rand::random::<u64>()));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+        fn write(&self, content: &str) -> PathBuf {
+            let path = self.0.join("services.conf");
+            fs::write(&path, content).unwrap();
+            path
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn aliases_repeated_keys_resets_and_sections_are_preserved() {
+        let fixture = Fixture::new();
+        fs::write(fixture.0.join("vars.env"), "A=file\n").unwrap();
+        let path = fixture.write("[program:a]\ncommand=/bin/echo\nEnvironment=OLD=old\nenvironment=\nEnvironment=A=inline\nenvironment=B=retained\nEnvironmentFile=missing.env\nenvironment_file=\nEnvironmentFile=vars.env\n[program:b]\ncommand=/bin/echo\nenvironment=A=separate\n");
+        let (services, warnings) = parse_program_file(&path);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let vars = services[0].environment.resolve().unwrap();
+        assert_eq!(vars["A"], "file");
+        assert_eq!(vars["B"], "retained");
+        assert!(!vars.contains_key("OLD"));
+        assert_eq!(services[1].environment.resolve().unwrap()["A"], "separate");
+    }
+
+    #[test]
+    fn check_config_reads_files_but_run_defers_until_spawn() {
+        let fixture = Fixture::new();
+        fixture.write("[program:a]\ncommand=/bin/echo\nenvironment_file=missing.env\n");
+        let (entries, warnings) =
+            load_program_service_entries(&fixture.0, false, ProgramParsePolicy::v1()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(warnings.is_empty());
+        let err = load_program_service_entries(&fixture.0, true, ProgramParsePolicy::v1())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing.env"));
+        fs::write(fixture.0.join("missing.env"), "A=created-before-start").unwrap();
+        assert_eq!(
+            entries[0].service.environment.resolve().unwrap()["A"],
+            "created-before-start"
+        );
+        assert!(load_program_service_entries(&fixture.0, true, ProgramParsePolicy::v1()).is_ok());
+    }
+
+    #[test]
+    fn reload_validates_environment_and_reads_new_inline_values() {
+        let fixture = Fixture::new();
+        let command = if cfg!(windows) {
+            "C:/Windows/System32/cmd.exe"
+        } else {
+            "/bin/echo"
+        };
+        let path = fixture.write(&format!(
+            "[program:a]\ncommand={command}\nenvironment=A=old\nenvironment_file=values.env\n"
+        ));
+        fs::write(fixture.0.join("values.env"), "B=file").unwrap();
+        let first = load_program_services_from_file(&path).unwrap();
+        assert_eq!(first[0].service.environment.resolve().unwrap()["A"], "old");
+        fixture.write(&format!(
+            "[program:a]\ncommand={command}\nenvironment=A=new\nenvironment_file=values.env\n"
+        ));
+        let second = load_program_services_from_file(&path).unwrap();
+        assert_eq!(second[0].service.environment.resolve().unwrap()["A"], "new");
+        fs::write(fixture.0.join("values.env"), "INVALID").unwrap();
+        assert!(load_program_services_from_file(&path).is_err());
     }
 }
