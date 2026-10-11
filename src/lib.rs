@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod config;
+pub mod environment;
 pub mod ipc;
 pub mod platform;
 pub mod platform_fs;

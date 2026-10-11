@@ -43,7 +43,7 @@ chmod +x scripts/build_pkg.sh packaging/postinstall
 ```
 
 产物：
-- `dist/rustpm-0.1.0-unsigned.pkg`
+- `dist/rustpm-0.1.2-unsigned.pkg`
 
 方案 B：安装预构建 pkg
 
@@ -52,7 +52,7 @@ chmod +x scripts/build_pkg.sh packaging/postinstall
 安装命令：
 
 ```bash
-sudo installer -pkg dist/rustpm-0.1.0-unsigned.pkg -target /
+sudo installer -pkg dist/rustpm-0.1.2-unsigned.pkg -target /
 ```
 
 安装默认行为：
@@ -77,17 +77,17 @@ MSI 安装（推荐）：
 # 构建 MSI（需要 WiX Toolset）
 .\scripts\build_msi.ps1
 
-# 双击 dist\rustpm-0.1.0-x64.msi 即可安装
+# 双击 dist\rustpm-0.1.2-x64.msi 即可安装
 # Windows 会自动弹出 UAC 提权窗口。
 
 # 或命令行（必须在管理员 PowerShell 中运行）：
-msiexec /i dist\rustpm-0.1.0-x64.msi
+msiexec /i dist\rustpm-0.1.2-x64.msi
 
 # 静默安装（必须在管理员 PowerShell 中运行）：
-msiexec /i dist\rustpm-0.1.0-x64.msi /quiet
+msiexec /i dist\rustpm-0.1.2-x64.msi /quiet
 
 # 卸载：
-msiexec /x dist\rustpm-0.1.0-x64.msi
+msiexec /x dist\rustpm-0.1.2-x64.msi
 ```
 
 从源码构建（手动注册服务）：
@@ -120,18 +120,18 @@ Stop-Service -Name rustpm
 ### GitHub Releases（Windows amd64）
 
 [发布工作流](.github/workflows/release.yml) 只构建 Windows amd64 MSI，
-并上传到对应的 GitHub Release。`v0.1.0` 的产物为 `rustpm-0.1.0-x64.msi`。
+并上传到对应的 GitHub Release。`v0.1.2` 的产物为 `rustpm-0.1.2-x64.msi`。
 
 提交并推送工作流及打包修改后，推送版本标签即可触发：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.2
+git push origin v0.1.2
 ```
 
 CI 在临时检出目录中使用标签统一 Cargo 包版本、MSI 内部版本和注册表版本，依赖版本保持锁定。
 如需重跑已有标签，可打开 **Actions → Release Windows MSI → Run workflow**，
-默认标签为 `v0.1.1`，选择 `main` 分支可用最新工作流修复重跑已有标签。
+默认标签为 `v0.1.2`，选择 `main` 分支可用最新工作流修复重跑已有标签。
 标签指向的提交必须包含上述打包修改。
 无需额外配置仓库 Secret，工作流使用具备 `contents: write` 权限的 `GITHUB_TOKEN` 发布。
 
@@ -140,6 +140,8 @@ CI 在临时检出目录中使用标签统一 Cargo 包版本、MSI 内部版本
 安装流程暂未发布。
 
 ## 配置
+
+托管程序环境变量：[Environment 与 EnvironmentFile 使用说明](docs/environment.zh-CN.md)。
 
 ### macOS（已支持）
 
@@ -174,6 +176,8 @@ command = "/Users/alice/My Service/bin/example" -c "/Users/alice/My Service/conf
 支持键：
 - `directory`
 - `command`
+- `environment` / `Environment`
+- `environment_file` / `EnvironmentFile`
 - `user`：
   - `root` 或 `Administrator` 视为 `privilege=elevated`
   - 当 `privilege=normal` 时，可指定本机非 root 用户；在 Unix 上 rustpm 会按该用户身份拉起服务
@@ -251,6 +255,8 @@ command = "C:/Program Files/My Service/myservice.exe" --config "C:/Program Files
 支持的键（与 macOS 相同）：
 - `directory`
 - `command`
+- `environment` / `Environment`
+- `environment_file` / `EnvironmentFile`
 - `user`：
   - `Administrator` 等价于 `privilege=elevated`
   - `privilege=normal` 时可指定非管理员本地账户

@@ -41,7 +41,7 @@ chmod +x scripts/build_pkg.sh packaging/postinstall
 ```
 
 Generated package:
-- `dist/rustpm-0.1.0-unsigned.pkg`
+- `dist/rustpm-0.1.2-unsigned.pkg`
 
 Option B: install a prebuilt pkg
 
@@ -50,7 +50,7 @@ If you already have a prebuilt pkg (from CI/artifacts or from another machine), 
 Install:
 
 ```bash
-sudo installer -pkg dist/rustpm-0.1.0-unsigned.pkg -target /
+sudo installer -pkg dist/rustpm-0.1.2-unsigned.pkg -target /
 ```
 
 Installer defaults:
@@ -75,17 +75,17 @@ Install from MSI (recommended):
 # Build MSI (requires WiX Toolset)
 .\scripts\build_msi.ps1
 
-# Double-click dist\rustpm-0.1.0-x64.msi to install
+# Double-click dist\rustpm-0.1.2-x64.msi to install
 # Windows will show UAC elevation prompt automatically.
 
 # Or command-line (must run from elevated/admin PowerShell):
-msiexec /i dist\rustpm-0.1.0-x64.msi
+msiexec /i dist\rustpm-0.1.2-x64.msi
 
 # Silent install (must run from elevated/admin PowerShell):
-msiexec /i dist\rustpm-0.1.0-x64.msi /quiet
+msiexec /i dist\rustpm-0.1.2-x64.msi /quiet
 
 # Uninstall:
-msiexec /x dist\rustpm-0.1.0-x64.msi
+msiexec /x dist\rustpm-0.1.2-x64.msi
 ```
 
 Build from source (with manual service registration):
@@ -119,19 +119,19 @@ Stop-Service -Name rustpm
 ### GitHub Releases (Windows amd64)
 
 The [release workflow](.github/workflows/release.yml) builds only the Windows
-amd64 MSI and attaches it to the corresponding GitHub Release. For `v0.1.0`,
-the asset is `rustpm-0.1.0-x64.msi`.
+amd64 MSI and attaches it to the corresponding GitHub Release. For `v0.1.2`,
+the asset is `rustpm-0.1.2-x64.msi`.
 
 After committing and pushing the workflow and packaging changes, publish the tag:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.2
+git push origin v0.1.2
 ```
 
 The release tag sets the Cargo package, MSI product, and registry versions in
 the temporary CI checkout; dependency versions remain locked. To retry an existing tag, use
-**Actions → Release Windows MSI → Run workflow** (default tag: `v0.1.1`).
+**Actions → Release Windows MSI → Run workflow** (default tag: `v0.1.2`).
 Select the `main` branch to use the latest workflow fixes for an existing tag.
 The tagged commit must include the packaging changes. No additional repository
 secret is required; publication uses `GITHUB_TOKEN` with `contents: write`.
@@ -141,6 +141,8 @@ secret is required; publication uses `GITHUB_TOKEN` with `contents: write`.
 Installation workflow is not released yet.
 
 ## Configuration
+
+Managed program environment variables: [Environment and EnvironmentFile](docs/environment.md).
 
 ### macOS (supported)
 
@@ -175,6 +177,8 @@ command = "/Users/alice/My Service/bin/example" -c "/Users/alice/My Service/conf
 Supported keys:
 - `directory`
 - `command`
+- `environment` / `Environment`
+- `environment_file` / `EnvironmentFile`
 - `user`:
   - `root` or `Administrator` is treated as `privilege=elevated`
   - for `privilege=normal`, a local non-root account can be specified and rustpm will spawn the service with that user identity on Unix
@@ -253,6 +257,8 @@ command = "C:/Program Files/My Service/myservice.exe" --config "C:/Program Files
 Supported keys (same as macOS):
 - `directory`
 - `command`
+- `environment` / `Environment`
+- `environment_file` / `EnvironmentFile`
 - `user`:
   - `privilege=normal` defaults to `LocalService` with medium integrity; `LocalService` and `NetworkService` are supported.
   - Other accounts require credentials and are rejected. Elevated tasks must omit `user` and use the helper service identity.

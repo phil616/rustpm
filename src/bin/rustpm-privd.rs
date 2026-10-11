@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
         tracing::warn!(warning = %warning, "program config skipped in run mode");
     }
 
-    info!(
+    tracing::info!(
         service_count = runtime.services.len(),
         socket = %runtime.privd_socket_path.display(),
         "rustpm-privd starting"
