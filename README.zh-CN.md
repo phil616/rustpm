@@ -43,7 +43,7 @@ chmod +x scripts/build_pkg.sh packaging/postinstall
 ```
 
 产物：
-- `dist/rustpm-0.1.3-unsigned.pkg`
+- `dist/rustpm-0.1.4-unsigned.pkg`
 
 方案 B：安装预构建 pkg
 
@@ -52,7 +52,7 @@ chmod +x scripts/build_pkg.sh packaging/postinstall
 安装命令：
 
 ```bash
-sudo installer -pkg dist/rustpm-0.1.3-unsigned.pkg -target /
+sudo installer -pkg dist/rustpm-0.1.4-unsigned.pkg -target /
 ```
 
 安装默认行为：
@@ -73,21 +73,23 @@ rustpm 作为 Windows Service 运行，由 Windows Service Control Manager 管�
 
 MSI 安装（推荐）：
 
+构建需要 WiX Toolset v5；构建脚本会自动下载匹配版本的 Util 扩展（首次构建需要联网）。服务故障恢复通过该扩展配置，绕过 Windows Installer 原生故障恢复配置的已知问题。
+
 ```powershell
 # 构建 MSI（需要 WiX Toolset）
 .\scripts\build_msi.ps1
 
-# 双击 dist\rustpm-0.1.3-x64.msi 即可安装
+# 双击 dist\rustpm-0.1.4-x64.msi 即可安装
 # Windows 会自动弹出 UAC 提权窗口。
 
 # 或命令行（必须在管理员 PowerShell 中运行）：
-msiexec /i dist\rustpm-0.1.3-x64.msi
+msiexec /i dist\rustpm-0.1.4-x64.msi
 
 # 静默安装（必须在管理员 PowerShell 中运行）：
-msiexec /i dist\rustpm-0.1.3-x64.msi /quiet
+msiexec /i dist\rustpm-0.1.4-x64.msi /quiet
 
 # 卸载：
-msiexec /x dist\rustpm-0.1.3-x64.msi
+msiexec /x dist\rustpm-0.1.4-x64.msi
 ```
 
 从源码构建（手动注册服务）：
@@ -121,18 +123,18 @@ Stop-Service -Name rustpm
 ### GitHub Releases（Windows amd64）
 
 [发布工作流](.github/workflows/release.yml) 只构建 Windows amd64 MSI，
-并上传到对应的 GitHub Release。`v0.1.3` 的产物为 `rustpm-0.1.3-x64.msi`。
+并上传到对应的 GitHub Release。`v0.1.4` 的产物为 `rustpm-0.1.4-x64.msi`。
 
 提交并推送工作流及打包修改后，推送版本标签即可触发：
 
 ```bash
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 CI 在临时检出目录中使用标签统一 Cargo 包版本、MSI 内部版本和注册表版本，依赖版本保持锁定。
 如需重跑已有标签，可打开 **Actions → Release Windows MSI → Run workflow**，
-默认标签为 `v0.1.3`，选择 `main` 分支可用最新工作流修复重跑已有标签。
+默认标签为 `v0.1.4`，选择 `main` 分支可用最新工作流修复重跑已有标签。
 标签指向的提交必须包含上述打包修改。
 无需额外配置仓库 Secret，工作流使用具备 `contents: write` 权限的 `GITHUB_TOKEN` 发布。
 

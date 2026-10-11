@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <?ifndef ProductVersion ?>
-    <?define ProductVersion = "0.1.3" ?>
+    <?define ProductVersion = "0.1.4" ?>
   <?endif ?>
   <?ifndef BinaryDir ?>
     <?define BinaryDir = "..\target\release" ?>
@@ -16,10 +17,10 @@
 
        Double-click the .msi to install (UAC elevation prompt).
        Or command-line:
-         msiexec /i rustpm-0.1.3-x64.msi                    (GUI)
-         msiexec /i rustpm-0.1.3-x64.msi /quiet /norestart   (silent)
-         msiexec /x rustpm-0.1.3-x64.msi                     (uninstall)
-         msiexec /i rustpm-0.1.3-x64.msi /f                 (repair)
+         msiexec /i rustpm-0.1.4-x64.msi                    (GUI)
+         msiexec /i rustpm-0.1.4-x64.msi /quiet /norestart   (silent)
+         msiexec /x rustpm-0.1.4-x64.msi                     (uninstall)
+         msiexec /i rustpm-0.1.4-x64.msi /f                 (repair)
   ============================================================ -->
 
   <Package Name="rustpm"
@@ -83,11 +84,13 @@
                         Arguments='run --config "[ConfigDir]rustpmd.conf"'>
           <ServiceDependency Id="rustpm-privd" />
           <ServiceConfig OnInstall="yes" OnReinstall="yes" FailureActionsWhen="failedToStopOrReturnedError" />
-          <ServiceConfigFailureActions OnInstall="yes" OnReinstall="yes" ResetPeriod="86400">
-            <Failure Action="restartService" Delay="5000" />
-            <Failure Action="restartService" Delay="5000" />
-            <Failure Action="restartService" Delay="5000" />
-          </ServiceConfigFailureActions>
+          <!-- MSI's native failure-actions table is broken; use WiX's deferred
+               service configuration action, including rollback support. -->
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              ResetPeriodInDays="1"
+                              RestartServiceDelayInSeconds="5" />
         </ServiceInstall>
         <ServiceControl Id="RustpmServiceControl"
                         Name="rustpm"
@@ -110,11 +113,11 @@
                         ErrorControl="normal"
                         Arguments='--config "[ConfigDir]rustpmd.conf"'>
           <ServiceConfig OnInstall="yes" OnReinstall="yes" FailureActionsWhen="failedToStopOrReturnedError" />
-          <ServiceConfigFailureActions OnInstall="yes" OnReinstall="yes" ResetPeriod="86400">
-            <Failure Action="restartService" Delay="5000" />
-            <Failure Action="restartService" Delay="5000" />
-            <Failure Action="restartService" Delay="5000" />
-          </ServiceConfigFailureActions>
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              ResetPeriodInDays="1"
+                              RestartServiceDelayInSeconds="5" />
         </ServiceInstall>
         <ServiceControl Id="RustpmPrivdServiceControl"
                         Name="rustpm-privd"

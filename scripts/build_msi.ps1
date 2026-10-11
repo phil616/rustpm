@@ -92,6 +92,17 @@ if (-not $wixExe) {
 
 Write-Host "WiX: $wixExe"
 
+# Pin the extension to the tool's version so local and CI builds use matching
+# custom actions. The WiX cache makes repeated adds inexpensive.
+$wixVersionOutput = & $wixExe --version
+if ($LASTEXITCODE -ne 0) { throw "Unable to determine WiX version" }
+$wixVersion = ([string]$wixVersionOutput).Trim().Split('+')[0]
+if ($wixVersion -notmatch '^5\.\d+\.\d+$') {
+    throw "WiX Toolset v5 is required; found '$wixVersion'."
+}
+& $wixExe extension add -g "WixToolset.Util.wixext/$wixVersion"
+if ($LASTEXITCODE -ne 0) { throw "WiX Util extension installation failed" }
+
 # ---- Output directory ----
 $distDir = Join-Path $RepoRoot "dist"
 New-Item -ItemType Directory -Path $distDir -Force | Out-Null
@@ -101,7 +112,7 @@ $msiFile = Join-Path $distDir "rustpm-$version-x64.msi"
 Write-Host "Building MSI..."
 Push-Location "$RepoRoot\wix"
 try {
-    & $wixExe build main.wxs -arch x64 -d "ProductVersion=$version" -d "BinaryDir=$TargetDir" -o $msiFile 2>&1
+    & $wixExe build main.wxs -arch x64 -ext WixToolset.Util.wixext -d "ProductVersion=$version" -d "BinaryDir=$TargetDir" -o $msiFile 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "wix build failed (exit code $LASTEXITCODE)"
     }
