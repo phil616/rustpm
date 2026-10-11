@@ -16,7 +16,7 @@ const DEFAULT_SOCKET: &str = "/usr/local/var/run/rustpm/rustpmd.sock";
 const DEFAULT_SOCKET: &str = "\\\\.\\pipe\\rustpmd";
 
 #[derive(Parser, Debug)]
-#[command(name = "rustpmctl", about = "Control rustpmd managed services")]
+#[command(version, name = "rustpmctl", about = "Control rustpmd managed services")]
 struct Cli {
     /// Socket/pipe path for rustpmd control channel.
     #[arg(long, default_value = DEFAULT_SOCKET)]

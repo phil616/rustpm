@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "rustpm-privd", about = "Privileged helper daemon for rustpm")]
+#[command(version, name = "rustpm-privd", about = "Privileged helper daemon for rustpm")]
 struct Cli {
     /// Daemon config path (default: /usr/local/etc/rustpm/rustpmd.conf).
     #[arg(short, long)]

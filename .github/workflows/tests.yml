@@ -13,3 +13,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: cargo test --locked --all-targets
+      - uses: actions/setup-dotnet@v5
+        if: runner.os == 'Windows'
+        with:
+          dotnet-version: '8.0.x'
+      - name: Verify Windows MSI build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          if ($LASTEXITCODE -ne 0) { throw "WiX installation failed" }
+          .\scripts\build_msi.ps1 -Target x86_64-pc-windows-msvc

@@ -450,6 +450,7 @@ mod tests {
         use super::*;
         let svc = ServiceConfig {
             name: "delayed".into(), command: "must-never-be-launched".into(), args: vec![],
+            environment: crate::environment::EnvironmentConfig::default(),
             working_dir: None, autostart: true, start_secs: 0, user: None,
             redirect_stderr: false, stdout_logfile: None, stderr_logfile: None,
             stdout_logfile_maxbytes: None, stdout_logfile_backups: None,

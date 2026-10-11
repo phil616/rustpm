@@ -1947,7 +1947,8 @@ mod environment_tests {
     #[test]
     fn check_config_reads_files_but_run_defers_until_spawn() {
         let fixture = Fixture::new();
-        fixture.write("[program:a]\ncommand=/bin/echo\nenvironment_file=missing.env\n");
+        let command = if cfg!(windows) { "C:/Windows/System32/cmd.exe" } else { "/bin/echo" };
+        fixture.write(&format!("[program:a]\ncommand={command}\nenvironment_file=missing.env\n"));
         let (entries, warnings) =
             load_program_service_entries(&fixture.0, false, ProgramParsePolicy::v1()).unwrap();
         assert_eq!(entries.len(), 1);

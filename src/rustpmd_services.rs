@@ -111,7 +111,7 @@ async fn spawn_service(svc: &ServiceConfig) -> Result<StartedService> {
         .await?
         .map_err(|err| anyhow!("service '{}' environment: {}", svc.name, err))?;
     let mut cmd = Command::new(&svc.command);
-    cmd.args(&svc.args).envs(environment).stdin(Stdio::null());
+    cmd.args(&svc.args).envs(&environment).stdin(Stdio::null());
     let log_bindings = apply_stdio(svc, &mut cmd)?;
     if let Some(dir) = &svc.working_dir {
         cmd.current_dir(dir);
@@ -149,6 +149,7 @@ async fn spawn_service(svc: &ServiceConfig) -> Result<StartedService> {
         &svc.command, &svc.args, svc.user.as_deref(), svc.privilege == PrivilegeMode::Elevated,
         svc.working_dir.as_ref(), svc.stdout_logfile.as_ref(),
         if svc.redirect_stderr { svc.stdout_logfile.as_ref() } else { svc.stderr_logfile.as_ref() },
+        &environment,
     )?;
     let pid_u32 = child
         .id()
@@ -403,6 +404,10 @@ mod environment_tests {
             "args": ["--exact", "rustpmd::rustpmd_services::environment_tests::child_probe", "--nocapture"],
         })).unwrap();
         svc.environment = EnvironmentConfig::parse(&source, &directives, false).unwrap();
+        // Token switching needs SYSTEM privileges; the probe exercises native
+        // spawning under the test runner identity without changing accounts.
+        #[cfg(windows)]
+        { svc.privilege = PrivilegeMode::Elevated; }
         for value in ["first", "after-restart"] {
             fs::write(&file, format!("RUSTPM_ENV_TEST_VALUE={value}")).unwrap();
             let mut child = spawn_service(&svc).await.unwrap();

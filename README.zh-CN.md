@@ -43,7 +43,7 @@ chmod +x scripts/build_pkg.sh packaging/postinstall
 ```
 
 产物：
-- `dist/rustpm-0.1.2-unsigned.pkg`
+- `dist/rustpm-0.1.3-unsigned.pkg`
 
 方案 B：安装预构建 pkg
 
@@ -52,7 +52,7 @@ chmod +x scripts/build_pkg.sh packaging/postinstall
 安装命令：
 
 ```bash
-sudo installer -pkg dist/rustpm-0.1.2-unsigned.pkg -target /
+sudo installer -pkg dist/rustpm-0.1.3-unsigned.pkg -target /
 ```
 
 安装默认行为：
@@ -77,17 +77,17 @@ MSI 安装（推荐）：
 # 构建 MSI（需要 WiX Toolset）
 .\scripts\build_msi.ps1
 
-# 双击 dist\rustpm-0.1.2-x64.msi 即可安装
+# 双击 dist\rustpm-0.1.3-x64.msi 即可安装
 # Windows 会自动弹出 UAC 提权窗口。
 
 # 或命令行（必须在管理员 PowerShell 中运行）：
-msiexec /i dist\rustpm-0.1.2-x64.msi
+msiexec /i dist\rustpm-0.1.3-x64.msi
 
 # 静默安装（必须在管理员 PowerShell 中运行）：
-msiexec /i dist\rustpm-0.1.2-x64.msi /quiet
+msiexec /i dist\rustpm-0.1.3-x64.msi /quiet
 
 # 卸载：
-msiexec /x dist\rustpm-0.1.2-x64.msi
+msiexec /x dist\rustpm-0.1.3-x64.msi
 ```
 
 从源码构建（手动注册服务）：
@@ -97,7 +97,8 @@ msiexec /x dist\rustpm-0.1.2-x64.msi
 cargo build --release
 
 # 安装为 Windows Service
-rustpmd.exe install --config "C:\Program Files\rustpm\config\rustpmd.conf"
+.\scripts\build_msi.ps1
+# 安装生成的 MSI，以注册两个 Windows 服务。
 ```
 
 服务管理：
@@ -120,18 +121,18 @@ Stop-Service -Name rustpm
 ### GitHub Releases（Windows amd64）
 
 [发布工作流](.github/workflows/release.yml) 只构建 Windows amd64 MSI，
-并上传到对应的 GitHub Release。`v0.1.2` 的产物为 `rustpm-0.1.2-x64.msi`。
+并上传到对应的 GitHub Release。`v0.1.3` 的产物为 `rustpm-0.1.3-x64.msi`。
 
 提交并推送工作流及打包修改后，推送版本标签即可触发：
 
 ```bash
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 CI 在临时检出目录中使用标签统一 Cargo 包版本、MSI 内部版本和注册表版本，依赖版本保持锁定。
 如需重跑已有标签，可打开 **Actions → Release Windows MSI → Run workflow**，
-默认标签为 `v0.1.2`，选择 `main` 分支可用最新工作流修复重跑已有标签。
+默认标签为 `v0.1.3`，选择 `main` 分支可用最新工作流修复重跑已有标签。
 标签指向的提交必须包含上述打包修改。
 无需额外配置仓库 Secret，工作流使用具备 `contents: write` 权限的 `GITHUB_TOKEN` 发布。
 
@@ -182,6 +183,7 @@ command = "/Users/alice/My Service/bin/example" -c "/Users/alice/My Service/conf
   - `root` 或 `Administrator` 视为 `privilege=elevated`
   - 当 `privilege=normal` 时，可指定本机非 root 用户；在 Unix 上 rustpm 会按该用户身份拉起服务
 - `privilege`（`normal` 或 `elevated`）
+- `autostart`（默认 true；false 时等待手动启动）
 - `startsecs`
 - `autorestart`
 - `redirect_stderr`
@@ -198,7 +200,7 @@ socket = /usr/local/var/run/rustpm/rustpmd.sock
 privd_socket = /usr/local/var/run/rustpm/rustpm-privd.sock
 
 [web]
-enabled = true
+enabled = false
 bind = 127.0.0.1
 port = 18765
 expose = false
@@ -213,7 +215,7 @@ service_start_delay_secs = 30
 service_start_spin_interval_secs = 1
 ```
 
-Web 默认开启，默认密码为 `password`（生产环境建议立即修改）。
+Web 默认关闭。启用前请配置私有密码哈希。
 详细安全与 API 行为请查看：[docs/security-api.zh-CN.md](docs/security-api.zh-CN.md)。
 
 ### Windows（已支持）
@@ -223,7 +225,7 @@ Web 默认开启，默认密码为 `password`（生产环境建议立即修改�
 默认位置：
 - 守护配置：`C:\Program Files\rustpm\config\rustpmd.conf`
 - 服务配置：`C:\Program Files\rustpm\config\programs.d\`
-- 日志目录：`C:\Program Files\rustpm\logs\`
+- 日志目录：`C:\ProgramData\rustpm\logs\`
 - IPC 管道：`\\.\pipe\rustpmd`
 - Privd 管道：`\\.\pipe\rustpm-privd`
 
@@ -233,15 +235,15 @@ Web 默认开启，默认密码为 `password`（生产环境建议立即修改�
 [program:example]
 directory = C:\Users\admin\example
 command = C:\Users\admin\example\bin\example.exe -c C:\Users\admin\example\config.ini
-user = Administrator
+# elevated 任务使用 privd 服务身份，不设置 user。
 privilege = elevated
 startsecs = 3
 autorestart = true
 redirect_stderr = true
 stdout_logfile_maxbytes = 50MB
 stdout_logfile_backups = 10
-stdout_logfile = C:\Program Files\rustpm\logs\%(program_name)s.log
-stderr_logfile = C:\Program Files\rustpm\logs\%(program_name)s-error.log
+stdout_logfile = C:\ProgramData\rustpm\logs\%(program_name)s.log
+stderr_logfile = C:\ProgramData\rustpm\logs\%(program_name)s-error.log
 ```
 
 如果 Windows 的命令路径或参数里包含空格（例如 `C:\Program Files\...`），
@@ -258,9 +260,10 @@ command = "C:/Program Files/My Service/myservice.exe" --config "C:/Program Files
 - `environment` / `Environment`
 - `environment_file` / `EnvironmentFile`
 - `user`：
-  - `Administrator` 等价于 `privilege=elevated`
-  - `privilege=normal` 时可指定非管理员本地账户
+  - 普通任务默认使用 LocalService（medium 完整性），也支持 NetworkService。
+  - 任意账户登录需要凭据，目前明确拒绝；elevated 任务应省略 user。
 - `privilege`（`normal` 或 `elevated`）
+- `autostart`（默认 true；false 时等待手动启动）
 - `startsecs`
 - `autorestart`
 - `redirect_stderr`
@@ -277,7 +280,7 @@ socket = \\.\pipe\rustpmd
 privd_socket = \\.\pipe\rustpm-privd
 
 [web]
-enabled = true
+enabled = false
 bind = 127.0.0.1
 port = 18765
 expose = false
@@ -425,8 +428,8 @@ autorestart = true
 redirect_stderr = true
 stdout_logfile_maxbytes = 50MB
 stdout_logfile_backups = 10
-stdout_logfile = C:\Program Files\rustpm\logs\myservice.log
-stderr_logfile = C:\Program Files\rustpm\logs\myservice-error.log
+stdout_logfile = C:\ProgramData\rustpm\logs\myservice.log
+stderr_logfile = C:\ProgramData\rustpm\logs\myservice-error.log
 "@
 
 # 重启服务以加载新配置
@@ -480,10 +483,10 @@ Get-EventLog -LogName Application -Source rustpm -Newest 50
 
 ```powershell
 # 查看最近日志条目
-Get-Content -Tail 200 "C:\Program Files\rustpm\logs\myservice.log"
-Get-Content -Tail 200 "C:\Program Files\rustpm\logs\myservice-error.log"
-Get-Content -Tail 200 "C:\Program Files\rustpm\logs\rustpm.log"
-Get-Content -Tail 200 "C:\Program Files\rustpm\logs\rustpm-privd.log"
+Get-Content -Tail 200 "C:\ProgramData\rustpm\logs\myservice.log"
+Get-Content -Tail 200 "C:\ProgramData\rustpm\logs\myservice-error.log"
+Get-Content -Tail 200 "C:\ProgramData\rustpm\logs\rustpm.log"
+Get-Content -Tail 200 "C:\ProgramData\rustpm\logs\rustpm-privd.log"
 ```
 
 调试模式（前台运行，用于故障排除）：
@@ -554,7 +557,7 @@ msiexec /x C:\path\to\rustpm-<version>-x64.msi
 Remove-Item -Recurse -Force "C:\Program Files\rustpm\config"
 
 # 删除日志目录
-Remove-Item -Recurse -Force "C:\Program Files\rustpm\logs"
+Remove-Item -Recurse -Force "C:\ProgramData\rustpm\logs"
 
 # 删除安装目录
 Remove-Item -Recurse -Force "C:\Program Files\rustpm"
@@ -563,3 +566,5 @@ Remove-Item -Recurse -Force "C:\Program Files\rustpm"
 ### OpenWrt（规划中）
 
 卸载流程暂未发布。
+
+Windows 后台任务目前使用 Job Object 强制停止整个进程树，stop_grace_secs 不提供优雅退出。配置解析失败时 rescan 会保留已有任务。修改 privilege 需先删除配置并成功 rescan，再以新权限添加。Windows CLI 控制需管理员权限。

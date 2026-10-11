@@ -7,7 +7,12 @@ OUT_DIR="$ROOT_DIR/dist"
 STAGE_DIR="$ROOT_DIR/target/pkg-root"
 SCRIPTS_DIR="$ROOT_DIR/packaging"
 BUILD_SCRIPT="$ROOT_DIR/scripts/cargo-local.sh"
-VERSION="${VERSION:-0.1.2}"
+PACKAGE_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$ROOT_DIR/Cargo.toml" | head -n 1)"
+VERSION="${VERSION:-$PACKAGE_VERSION}"
+if [ -z "$PACKAGE_VERSION" ] || [ "$VERSION" != "$PACKAGE_VERSION" ]; then
+  echo "Package version must match Cargo.toml ($PACKAGE_VERSION)" >&2
+  exit 1
+fi
 ID="club.motofans.rustpm"
 PKG_PATH="$OUT_DIR/rustpm-${VERSION}-unsigned.pkg"
 

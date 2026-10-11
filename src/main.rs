@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use tracing::info;
 
 #[derive(Parser, Debug)]
-#[command(name = "rustpm", about = "A minimal rustpm process manager for services")]
+#[command(version, name = "rustpm", about = "A minimal rustpm process manager for services")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

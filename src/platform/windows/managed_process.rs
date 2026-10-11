@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::{
-    os::windows::{io::AsRawHandle, process::ExitStatusExt},
+    collections::BTreeMap,
+    os::windows::{ffi::OsStrExt, io::AsRawHandle, process::ExitStatusExt},
     path::PathBuf,
 };
 use windows::{
@@ -184,6 +185,62 @@ impl Drop for Environment {
     }
 }
 
+// Keep UTF-16 inherited values intact and replace configured ASCII names
+// case-insensitively, including PATH/Path. The OS requires a double-NUL block.
+unsafe fn merge_environment(
+    base: *const u16,
+    overrides: &BTreeMap<String, String>,
+) -> Result<Vec<u16>> {
+    let mut entries = BTreeMap::<Vec<u16>, Vec<u16>>::new();
+    let folded = |key: &[u16]| {
+        key.iter()
+            .map(|c| {
+                if (b'a' as u16..=b'z' as u16).contains(c) {
+                    c - 32
+                } else {
+                    *c
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut cursor = base;
+    while *cursor != 0 {
+        let mut len = 0;
+        while *cursor.add(len) != 0 {
+            len += 1;
+        }
+        let entry = std::slice::from_raw_parts(cursor, len).to_vec();
+        if let Some(offset) = entry
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find_map(|(i, c)| (*c == b'=' as u16).then_some(i))
+        {
+            entries.insert(folded(&entry[..offset]), entry);
+        }
+        cursor = cursor.add(len + 1);
+    }
+    for (name, value) in overrides {
+        if name.is_empty() || name.contains(['=', '\0']) {
+            return Err(anyhow!("invalid Windows environment name"));
+        }
+        let key: Vec<u16> = name.encode_utf16().collect();
+        let mut entry = wide(&format!("{name}={value}"))?;
+        entry.pop();
+        entries.insert(folded(&key), entry);
+    }
+    let mut block = Vec::new();
+    for entry in entries.values() {
+        block.extend_from_slice(entry);
+        block.push(0);
+    }
+    if block.is_empty() {
+        block.push(0);
+    }
+    block.push(0);
+    Ok(block)
+}
+
 struct AttributeList {
     _storage: Vec<usize>,
     list: LPPROC_THREAD_ATTRIBUTE_LIST,
@@ -239,6 +296,7 @@ pub fn spawn_managed(
     cwd: Option<&PathBuf>,
     stdout: Option<&PathBuf>,
     stderr: Option<&PathBuf>,
+    overrides: &BTreeMap<String, String>,
 ) -> Result<ManagedChild> {
     let token =
         service_token(user, elevated).context("failed to select Windows process identity")?;
@@ -258,6 +316,22 @@ pub fn spawn_managed(
             CreateEnvironmentBlock(&mut environment.0, token.raw(), false)?;
         }
     }
+    let block = if environment.0.is_null() {
+        let mut base = Vec::new();
+        for (name, value) in std::env::vars_os() {
+            base.extend(name.encode_wide());
+            base.push(b'=' as u16);
+            base.extend(value.encode_wide());
+            base.push(0);
+        }
+        if base.is_empty() {
+            base.push(0);
+        }
+        base.push(0);
+        unsafe { merge_environment(base.as_ptr(), overrides)? }
+    } else {
+        unsafe { merge_environment(environment.0.cast(), overrides)? }
+    };
     let input = std::fs::File::open("NUL")?;
     let open_output = |path: Option<&PathBuf>| -> std::io::Result<std::fs::File> {
         std::fs::OpenOptions::new()
@@ -296,7 +370,7 @@ pub fn spawn_managed(
         | CREATE_NO_WINDOW
         | EXTENDED_STARTUPINFO_PRESENT;
     let cwd_ptr = cwd.as_ref().map_or(PCWSTR::null(), |v| PCWSTR(v.as_ptr()));
-    let env = (!environment.0.is_null()).then_some(environment.0 as *const _);
+    let env = Some(block.as_ptr() as *const std::ffi::c_void);
     let result = unsafe {
         if let Some(token) = &token {
             CreateProcessAsUserW(
@@ -384,6 +458,7 @@ mod tests {
             None,
             None,
             None,
+            &BTreeMap::new(),
         )
         .unwrap();
         let status = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
@@ -423,6 +498,7 @@ mod tests {
             None,
             None,
             None,
+            &BTreeMap::new(),
         )
         .unwrap();
         // Wait for the shell to create a descendant rather than assume a fixed delay.
