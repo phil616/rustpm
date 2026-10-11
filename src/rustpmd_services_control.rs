@@ -50,9 +50,16 @@ pub(super) async fn register_service_actor_impl(
         let mut guard = handles.write().await;
         if let Some(old) = guard.remove(&name) {
             let _ = old.send(ServiceCommand::Shutdown).await;
+            old.closed().await;
         }
     }
 
+    service_meta.write().await.insert(name.clone(), ServiceMeta {
+        stdout_logfile: svc.stdout_logfile.as_ref().map(|v| v.display().to_string()),
+        stderr_logfile: svc.stderr_logfile.as_ref().map(|v| v.display().to_string()),
+        stdout_binding: None,
+        stderr_binding: None,
+    });
     let (tx, rx) = mpsc::channel::<ServiceCommand>(16);
     {
         let mut guard = handles.write().await;

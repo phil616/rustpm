@@ -15,6 +15,8 @@ mod rustpmd_service_logs;
 mod rustpmd_process_group;
 
 pub(super) struct ServicesFacade;
+// Serialize config mutations, including the entire stop-and-replace interval.
+pub(super) static SERVICE_UPDATES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl ServicesFacade {
     pub(super) async fn control_service(
@@ -138,42 +140,26 @@ async fn spawn_service(svc: &ServiceConfig) -> Result<StartedService> {
         }
     }
 
+    #[cfg(unix)]
     let child = cmd
         .spawn()
         .with_context(|| format!("failed to spawn service {}", svc.name))?;
+    #[cfg(windows)]
+    let child = crate::platform::windows::managed_process::spawn_managed(
+        &svc.command, &svc.args, svc.user.as_deref(), svc.privilege == PrivilegeMode::Elevated,
+        svc.working_dir.as_ref(), svc.stdout_logfile.as_ref(),
+        if svc.redirect_stderr { svc.stdout_logfile.as_ref() } else { svc.stderr_logfile.as_ref() },
+    )?;
     let pid_u32 = child
         .id()
         .ok_or_else(|| anyhow!("service {} started without pid", svc.name))?;
     let pgid = i32::try_from(pid_u32).with_context(|| format!("pid overflow for {}", svc.name))?;
-
-    #[cfg(windows)]
-    let job_handle = {
-        use windows::Win32::Foundation::CloseHandle;
-        use windows::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
-        use windows::Win32::System::Threading::OpenProcess;
-        use windows::Win32::System::Threading::PROCESS_CREATE_PROCESS;
-
-        unsafe {
-            match CreateJobObjectW(None, None) {
-                Ok(job) => {
-                    if let Ok(proc_handle) = OpenProcess(PROCESS_CREATE_PROCESS, false, pid_u32) {
-                        AssignProcessToJobObject(job, proc_handle).ok();
-                        let _ = CloseHandle(proc_handle);
-                    }
-                    job.0 as usize
-                }
-                Err(_) => 0,
-            }
-        }
-    };
 
     Ok(StartedService {
         child: RunningChild {
             child,
             pgid,
             pid_u32,
-            #[cfg(windows)]
-            job_handle,
         },
         log_bindings,
     })

@@ -30,7 +30,7 @@ pub(super) async fn manage_service_actor_impl(
     )
     .await;
 
-    loop {
+    'actor: loop {
         if !desired_running && running.is_none() {
             match rx.recv().await {
                 Some(cmd) => {
@@ -60,7 +60,18 @@ pub(super) async fn manage_service_actor_impl(
             if first_start_pending {
                 let now = Instant::now();
                 if startup_policy.first_start_not_before > now {
-                    sleep(startup_policy.first_start_not_before.duration_since(now)).await;
+                    tokio::select! {
+                        _ = sleep(startup_policy.first_start_not_before.duration_since(now)) => {}
+                        cmd = rx.recv() => {
+                            match cmd {
+                                Some(c) => {
+                                    if let ControlOutcome::Exit = apply_control(c, &mut desired_running, &mut backoff_until).await? { break; }
+                                }
+                                None => break,
+                            }
+                            continue;
+                        }
+                    }
                 }
                 first_start_pending = false;
             }
@@ -112,7 +123,18 @@ pub(super) async fn manage_service_actor_impl(
                 backoff_until = None;
             }
 
-            apply_start_spin_guard(&startup_policy).await;
+            tokio::select! {
+                _ = apply_start_spin_guard(&startup_policy) => {}
+                cmd = rx.recv() => {
+                    match cmd {
+                        Some(c) => {
+                            if let ControlOutcome::Exit = apply_control(c, &mut desired_running, &mut backoff_until).await? { break; }
+                        }
+                        None => break,
+                    }
+                    continue;
+                }
+            }
 
             update_state(
                 &state,
@@ -131,7 +153,21 @@ pub(super) async fn manage_service_actor_impl(
                     update_runtime_log_bindings(&service_meta, &name, &started.log_bindings).await;
                     if svc.start_secs > 0 {
                         let window = Duration::from_secs(svc.start_secs);
-                        match timeout(window, started.child.child.wait()).await {
+                        let deadline = Instant::now() + window;
+                        let result = loop {
+                            tokio::select! {
+                                result = timeout(deadline.saturating_duration_since(Instant::now()), started.child.child.wait()) => break result,
+                                cmd = rx.recv() => {
+                                    if matches!(cmd, Some(ServiceCommand::Start)) { continue; }
+                                    terminate_process_group(&name, &mut started.child, svc.restart.stop_grace_secs).await?;
+                                    let Some(cmd) = cmd else { break 'actor; };
+                                    if let ControlOutcome::Exit = apply_control(cmd, &mut desired_running, &mut backoff_until).await? { break 'actor; }
+                                    update_state(&state, &name, RuntimeRecord::new("startup interrupted by control request")).await;
+                                    continue 'actor;
+                                }
+                            }
+                        };
+                        match result {
                             Ok(wait_result) => {
                                 let status = wait_result.with_context(|| {
                                     format!("wait failed in start window for {}", name)
@@ -353,7 +389,10 @@ pub(super) async fn manage_service_actor_impl(
                             }).await;
                             break;
                         }
-                        None => break,
+                        None => {
+                            terminate_process_group(&name, running_child, svc.restart.stop_grace_secs).await?;
+                            break;
+                        },
                     }
                 }
             }
@@ -404,6 +443,32 @@ mod tests {
         let err = anyhow!("inner").context("inner").context("outer");
         let value = format_error_chain(&err);
         assert_eq!(value, "outer: inner");
+    }
+
+    #[tokio::test]
+    async fn startup_delay_can_be_stopped_and_shutdown_immediately() {
+        use super::*;
+        let svc = ServiceConfig {
+            name: "delayed".into(), command: "must-never-be-launched".into(), args: vec![],
+            working_dir: None, autostart: true, start_secs: 0, user: None,
+            redirect_stderr: false, stdout_logfile: None, stderr_logfile: None,
+            stdout_logfile_maxbytes: None, stdout_logfile_backups: None,
+            privilege: PrivilegeMode::Normal, restart: crate::config::RestartConfig::default(),
+        };
+        let state = Arc::new(RwLock::new(HashMap::new()));
+        let meta = Arc::new(RwLock::new(HashMap::new()));
+        let policy = ServiceStartupPolicy {
+            first_start_not_before: Instant::now() + Duration::from_secs(30),
+            spin_interval: Duration::ZERO,
+            spin_gate: Arc::new(tokio::sync::Mutex::new(Instant::now())),
+        };
+        let (tx, rx) = mpsc::channel(16);
+        let task = tokio::spawn(manage_service_actor_impl(svc, rx, Arc::clone(&state), meta, policy));
+        tx.send(ServiceCommand::Stop).await.unwrap();
+        tx.send(ServiceCommand::Shutdown).await.unwrap();
+        timeout(Duration::from_secs(1), task).await.unwrap().unwrap().unwrap();
+        assert!(matches!(state.read().await.get("delayed").unwrap().state, ServiceState::Stopped));
+        assert!(tx.is_closed());
     }
 }
 

@@ -28,7 +28,7 @@ use nix::{
 use tokio::net::{UnixListener, UnixStream};
 
 use tokio::{
-    process::{Child, Command},
+    process::Command,
     sync::{broadcast, mpsc, RwLock},
     time::{sleep, timeout, Instant},
 };
@@ -150,6 +150,14 @@ pub async fn run(
     let listener = UnixListener::bind(socket_path)
         .with_context(|| format!("failed to bind socket {}", socket_path.display()))?;
     set_socket_permissions(socket_path)?;
+    #[cfg(windows)]
+    let listener = crate::platform::windows::pipe::create_control_pipe(
+        socket_path.to_str().ok_or_else(|| anyhow!("invalid pipe name"))?, true,
+    )?;
+    let web_listener = if web.enabled {
+        Some(tokio::net::TcpListener::bind(SocketAddr::from((web.bind_ip, web.port))).await
+            .context("failed to bind web listener")?)
+    } else { None };
 
     let state: SharedState = Arc::new(RwLock::new(HashMap::new()));
     let handles: HandleMap = Arc::new(RwLock::new(HashMap::new()));
@@ -199,14 +207,10 @@ pub async fn run(
     let contract_for_control = contract.clone();
     let policies_for_control = policies.clone();
     let startup_policy_for_control = startup_policy.clone();
+    let control_fatal_tx = fatal_tx.clone();
     let control_task = tokio::spawn(async move {
-        #[cfg(windows)]
-        let pipe_arg = socket_path_buf.clone();
-        run_control_server(
-            #[cfg(unix)]
+        let result = run_control_server(
             listener,
-            #[cfg(windows)]
-            pipe_arg,
             control_handles,
             control_state,
             elevated_for_control,
@@ -221,7 +225,11 @@ pub async fn run(
             role,
             &mut control_shutdown_rx,
         )
-        .await
+        .await;
+        if let Err(err) = &result {
+            let _ = control_fatal_tx.try_send(format!("control server failed: {err:#}"));
+        }
+        result
     });
 
     let mut dependency_task = None;
@@ -230,13 +238,14 @@ pub async fn run(
             let mut dep_shutdown_rx = control_shutdown_tx.subscribe();
             let dep_socket = privd_socket_path.to_path_buf();
             let dep_cfg = dep.clone();
+            let dependency_fatal_tx = fatal_tx.clone();
             dependency_task = Some(tokio::spawn(async move {
                 monitor_privd_health(
                     dep_socket,
                     dep_cfg.healthcheck_interval_secs,
                     dep_cfg.failure_threshold,
                     &mut dep_shutdown_rx,
-                    fatal_tx,
+                    dependency_fatal_tx,
                 )
                 .await;
             }));
@@ -270,12 +279,18 @@ pub async fn run(
             startup_policy: startup_policy.clone(),
         };
         let web_shutdown_rx = control_shutdown_tx.subscribe();
-        let addr = SocketAddr::from((web.bind_ip, web.port));
+        let web_fatal_tx = fatal_tx.clone();
         web_task = Some(tokio::spawn(async move {
-            run_web_server(addr, web_state, web_shutdown_rx).await
+            let result = run_web_server(web_listener.expect("enabled web listener"), web_state, web_shutdown_rx).await;
+            if let Err(err) = &result {
+                let _ = web_fatal_tx.try_send(format!("web server failed: {err:#}"));
+            }
+            result
         }));
     }
 
+    #[cfg(windows)]
+    crate::platform::windows::service::report_ready()?;
     info!(
         services = handles.read().await.len(),
         socket = %socket_path.display(),
@@ -299,13 +314,6 @@ pub async fn run(
 
     let _ = control_shutdown_tx.send(());
 
-    let txs: Vec<mpsc::Sender<ServiceCommand>> = {
-        let guard = handles.read().await;
-        guard.values().cloned().collect()
-    };
-    for tx in &txs {
-        let _ = tx.send(ServiceCommand::Shutdown).await;
-    }
     match control_task.await {
         Ok(Ok(())) => {}
         Ok(Err(err)) => error!(error = %err, "control server failed"),
@@ -320,6 +328,17 @@ pub async fn run(
         }
     }
 
+    // Drain IPC and HTTP handlers before taking the final actor snapshot.
+    let txs: Vec<mpsc::Sender<ServiceCommand>> = {
+        let guard = handles.read().await;
+        guard.values().cloned().collect()
+    };
+    for tx in &txs {
+        let _ = tx.send(ServiceCommand::Shutdown).await;
+    }
+    for tx in &txs {
+        tx.closed().await;
+    }
     if let Some(task) = dependency_task {
         if let Err(err) = task.await {
             error!(error = %err, "dependency monitor task join failed");
@@ -329,7 +348,7 @@ pub async fn run(
     cleanup_socket(socket_path);
     info!("rustpmd stopped");
     if let Some(reason) = fatal_reason {
-        return Err(anyhow!("fatal dependency failure: {}", reason));
+        return Err(anyhow!("fatal daemon failure: {}", reason));
     }
     Ok(())
 }

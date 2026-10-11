@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) async fn run_web_server(
-    addr: SocketAddr,
+    listener: tokio::net::TcpListener,
     app_state: AppState,
     mut shutdown_rx: broadcast::Receiver<()>,
 ) -> Result<()> {
@@ -58,9 +58,7 @@ pub(super) async fn run_web_server(
         .nest("/api", api_router)
         .with_state(app_state);
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("failed to bind web listener at {}", addr))?;
+    let addr = listener.local_addr()?;
     info!(addr = %addr, "web control enabled");
 
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())

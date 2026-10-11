@@ -38,14 +38,52 @@ pub const DEFAULT_SOCKET_PATH: &str = "\\\\.\\pipe\\rustpmd";
 #[cfg(windows)]
 pub const DEFAULT_PRIVD_SOCKET_PATH: &str = "\\\\.\\pipe\\rustpm-privd";
 #[cfg(windows)]
-pub const DEFAULT_LOG_DIR: &str = "C:\\Program Files\\rustpm\\logs";
+pub const DEFAULT_LOG_DIR: &str = "C:\\ProgramData\\rustpm\\logs";
 
 pub const DEFAULT_WEB_BIND: &str = "127.0.0.1";
 pub const DEFAULT_WEB_PORT: u16 = 18765;
 pub const CONFIG_SCHEMA_V1: &str = "v1";
 const MAX_SERVICE_NAME_LEN: usize = 64;
+
+#[cfg(not(windows))]
+fn split_program_command(raw: &str) -> Option<Vec<String>> {
+    shlex::split(raw)
+}
+
+// Microsoft C runtime quoting: backslashes are literal except before a quote.
+#[cfg(windows)]
+fn split_program_command(raw: &str) -> Option<Vec<String>> {
+    let mut chars = raw.chars().peekable();
+    let mut args = Vec::new();
+    while chars.peek().is_some() {
+        while chars.peek().is_some_and(|c| *c == ' ' || *c == '\t') { chars.next(); }
+        if chars.peek().is_none() { break; }
+        let mut arg = String::new();
+        let mut quoted = false;
+        while let Some(&c) = chars.peek() {
+            if !quoted && (c == ' ' || c == '\t') { break; }
+            if c == '\\' {
+                let mut count = 0;
+                while chars.peek() == Some(&'\\') { chars.next(); count += 1; }
+                if chars.peek() == Some(&'"') {
+                    arg.extend(std::iter::repeat('\\').take(count / 2));
+                    if count % 2 == 1 { chars.next(); arg.push('"'); }
+                    // An even run leaves the quote for the next iteration.
+                } else { arg.extend(std::iter::repeat('\\').take(count)); }
+            } else if c == '"' {
+                chars.next();
+                if quoted && chars.peek() == Some(&'"') { chars.next(); arg.push('"'); }
+                else { quoted = !quoted; }
+            } else { chars.next(); arg.push(c); }
+        }
+        if quoted { return None; }
+        args.push(arg);
+    }
+    Some(args)
+}
 const ALLOWED_PROGRAM_KEYS: &[&str] = &[
     "directory",
+    "autostart",
     "command",
     "user",
     "startsecs",
@@ -184,7 +222,7 @@ pub struct WebConfig {
 impl Default for WebConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             bind_ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             port: DEFAULT_WEB_PORT,
             expose: false,
@@ -410,7 +448,7 @@ fn load_daemon_file(path: &Path) -> Result<DaemonFileConfig> {
 
     let enabled = parse_flag(
         web_sec.get("enabled").or(root.get("web_enabled")),
-        true,
+        false,
         "web.enabled",
     )?;
     let bind_ip = parse_ip(
@@ -599,6 +637,8 @@ pub fn load_program_service_entries(
         ));
     }
 
+    let configs: Vec<ServiceConfig> = services.iter().map(|entry| entry.service.clone()).collect();
+    validate_services(&configs)?;
     Ok((services, warnings))
 }
 
@@ -725,7 +765,7 @@ fn build_service_config(
     let command_raw = kv
         .get("command")
         .ok_or_else(|| anyhow!("program '{}' missing command", program_name))?;
-    let argv = shlex::split(command_raw)
+    let argv = split_program_command(command_raw)
         .ok_or_else(|| anyhow!("program '{}' command parse failed", program_name))?;
     if argv.is_empty() {
         return Err(anyhow!("program '{}' command is empty", program_name));
@@ -733,7 +773,7 @@ fn build_service_config(
     let command = argv[0].clone();
     let args = argv[1..].to_vec();
 
-    let directory = kv.get("directory").map(PathBuf::from);
+    let directory = kv.get("directory").map(|v| PathBuf::from(v.trim().trim_matches('"')));
     let user = kv
         .get("user")
         .map(|v| v.trim().to_string())
@@ -787,7 +827,7 @@ fn build_service_config(
         command,
         args,
         working_dir: directory,
-        autostart: true,
+        autostart: parse_bool(kv.get("autostart"), true, "autostart", program_name)?,
         start_secs,
         user,
         redirect_stderr,
@@ -1384,7 +1424,7 @@ mod tests {
         #[cfg(unix)]
         { format!("/bin/sleep {}", arg) }
         #[cfg(windows)]
-        { format!("{test_cmd}", test_cmd = test_cmd()) }
+        { let _ = arg; test_cmd() }
     }
 
     #[test]
@@ -1409,6 +1449,25 @@ mod tests {
         assert!(warnings.is_empty());
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].name, "alpha");
+    }
+
+    #[test]
+    fn autostart_false_and_quoted_directory_are_parsed() {
+        let path = test_temp_dir("autostart-test.conf");
+        fs::write(&path, format!("[program:manual]\ncommand={}\ndirectory=\"{}\"\nautostart=false\n", test_cmd(), std::env::temp_dir().display())).unwrap();
+        let (services, warnings) = parse_program_file(&path);
+        fs::remove_file(path).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(!services[0].autostart);
+        assert_eq!(services[0].working_dir.as_ref().unwrap(), &std::env::temp_dir());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_command_preserves_paths_empty_arguments_and_unicode() {
+        let args = super::split_program_command(r#""C:\Program Files\App\app.exe" --config "D:\My Data\配置.yaml" "" "C:\trailing\\" "quoted\"value""#).unwrap();
+        assert_eq!(args, vec![r"C:\Program Files\App\app.exe", "--config", r"D:\My Data\配置.yaml", "", "C:\\trailing\\", "quoted\"value"]);
+        assert!(super::split_program_command("\"unterminated").is_none());
     }
 
     #[test]
@@ -1699,7 +1758,7 @@ mod tests {
             .expect("should parse");
         assert_eq!(runtime.services.len(), 0);
         assert_eq!(runtime.web.password_hash, default_password_hash());
-        assert!(runtime.web.enabled);
+        assert!(!runtime.web.enabled);
 
         let _ = fs::remove_dir_all(&base);
     }

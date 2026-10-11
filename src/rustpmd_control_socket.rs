@@ -1,4 +1,5 @@
 use super::*;
+const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -68,11 +69,14 @@ pub(super) async fn run_control_server(
     role: DaemonRole,
     shutdown_rx: &mut broadcast::Receiver<()>,
 ) -> Result<()> {
+    let mut connections = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
             _ = shutdown_rx.recv() => {
+                while connections.join_next().await.is_some() {}
                 return Ok(());
             }
+            _ = connections.join_next(), if !connections.is_empty() => {}
             accepted = listener.accept() => {
                 let (stream, _) = accepted.context("failed to accept control connection")?;
                 let runtime = ControlRuntime {
@@ -89,7 +93,7 @@ pub(super) async fn run_control_server(
                     contract: contract.clone(),
                     role,
                 };
-                tokio::spawn(async move {
+                connections.spawn(async move {
                     if let Err(err) = handle_control_connection(stream, runtime).await {
                         warn!(error = %err, "control request failed");
                     }
@@ -107,7 +111,7 @@ async fn handle_control_connection(stream: UnixStream, runtime: ControlRuntime) 
 
 #[cfg(windows)]
 pub(super) async fn run_control_server(
-    pipe_path: PathBuf,
+    mut server: tokio::net::windows::named_pipe::NamedPipeServer,
     handles: HandleMap,
     state: SharedState,
     elevated: ElevatedSet,
@@ -122,28 +126,23 @@ pub(super) async fn run_control_server(
     role: DaemonRole,
     shutdown_rx: &mut broadcast::Receiver<()>,
 ) -> Result<()> {
-    use tokio::net::windows::named_pipe::ServerOptions;
-
-    let pipe_name = pipe_path.to_str()
-        .ok_or_else(|| anyhow!("invalid named pipe path: {}", pipe_path.display()))?;
+    let pipe_name = socket_path.to_str()
+        .ok_or_else(|| anyhow!("invalid named pipe path: {}", socket_path.display()))?;
+    let mut connections = tokio::task::JoinSet::new();
 
     loop {
-        let server = match ServerOptions::new().create(pipe_name) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "failed to create named pipe, retrying in 1s");
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                continue;
-            }
-        };
-
         tokio::select! {
             _ = shutdown_rx.recv() => {
+                while connections.join_next().await.is_some() {}
                 return Ok(());
             }
+            _ = connections.join_next(), if !connections.is_empty() => {}
             result = server.connect() => {
                 match result {
                     Ok(()) => {
+                        // Keep a listening instance alive while the connected one is handled.
+                        let next = crate::platform::windows::pipe::create_control_pipe(pipe_name, false)?;
+                        let connected = std::mem::replace(&mut server, next);
                         let runtime = ControlRuntime {
                             handles: Arc::clone(&handles),
                             state: Arc::clone(&state),
@@ -158,14 +157,14 @@ pub(super) async fn run_control_server(
                             contract: contract.clone(),
                             role,
                         };
-                        tokio::spawn(async move {
-                            if let Err(err) = handle_control_connection(server, runtime).await {
+                        connections.spawn(async move {
+                            if let Err(err) = handle_control_connection(connected, runtime).await {
                                 warn!(error = %err, "control request failed");
                             }
                         });
                     }
                     Err(e) => {
-                        warn!(error = %e, "named pipe connect failed, retrying");
+                        return Err(e).context("named pipe connect failed");
                     }
                 }
             }
@@ -196,9 +195,8 @@ where
     let reader = BufReader::new(reader);
     let mut limited_reader = AsyncReadExt::take(reader, (crate::ipc::MAX_CONTROL_MESSAGE_BYTES + 1) as u64);
     let mut buf = String::new();
-    limited_reader
-        .read_line(&mut buf)
-        .await
+    timeout(CONTROL_IO_TIMEOUT, limited_reader.read_line(&mut buf))
+        .await.context("control request read timed out")?
         .context("failed to read control request")?;
     if buf.len() > crate::ipc::MAX_CONTROL_MESSAGE_BYTES {
         return Err(anyhow!(
@@ -213,10 +211,29 @@ where
     let req: ControlRequest = serde_json::from_str(buf.trim()).context("invalid control request json")?;
     let resp = process_request(req, &runtime).await;
     let payload = serde_json::to_string(&resp).context("failed to encode response")?;
-    writer
-        .write_all(payload.as_bytes())
-        .await
+    timeout(CONTROL_IO_TIMEOUT, writer.write_all(payload.as_bytes()))
+        .await.context("control response write timed out")?
         .context("failed to write response")?;
-    writer.write_all(b"\n").await.context("failed to write newline")?;
+    timeout(CONTROL_IO_TIMEOUT, writer.write_all(b"\n")).await.context("control newline write timed out")?.context("failed to write newline")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_connection_has_a_read_deadline() {
+        let (_client, server) = tokio::io::duplex(64);
+        let (reader, writer) = tokio::io::split(server);
+        let result = process_control_message(reader, writer, rustpmd_state::test_control_runtime()).await;
+        assert!(result.unwrap_err().to_string().contains("read timed out"));
+    }
+
+    #[tokio::test]
+    async fn oversized_request_is_rejected_before_json_processing() {
+        let input = vec![b'x'; crate::ipc::MAX_CONTROL_MESSAGE_BYTES + 1];
+        let result = process_control_message(input.as_slice(), tokio::io::sink(), rustpmd_state::test_control_runtime()).await;
+        assert!(result.unwrap_err().to_string().contains("too large"));
+    }
 }

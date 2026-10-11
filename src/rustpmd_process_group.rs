@@ -53,35 +53,13 @@ pub(super) async fn terminate_process_group_impl(
     running: &mut RunningChild,
     stop_grace_secs: u64,
 ) -> Result<()> {
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::System::JobObjects::TerminateJobObject;
-
-    let job = running.job_handle;
-    if job != 0 {
-        unsafe {
-            TerminateJobObject(HANDLE(job as *mut std::ffi::c_void), 1).ok();
-        }
-    }
-
-    let grace = Duration::from_secs(stop_grace_secs);
-    match timeout(grace, running.child.wait()).await {
-        Ok(wait_result) => {
-            let _ = wait_result.with_context(|| format!("wait failed during stop for {}", service_name))?;
-            info!(service = service_name, "service terminated");
-        }
-        Err(_) => {
-            warn!(service = service_name, grace_secs = stop_grace_secs, "grace timeout, force killing");
-            if let Err(e) = running.child.kill().await {
-                warn!(service = service_name, error = %e, "force kill failed");
-            }
-            let _ = running
-                .child
-                .wait()
-                .await
-                .with_context(|| format!("wait failed after kill for {}", service_name))?;
-        }
-    }
-
+    // Detached Windows programs cannot receive console control events.
+    // This backend explicitly uses force-stop mode; do not pretend a grace
+    // interval after TerminateJobObject is a graceful shutdown.
+    let _ = stop_grace_secs;
+    running.child.terminate_tree().with_context(|| format!("failed to terminate job for {}", service_name))?;
+    running.child.wait().await.with_context(|| format!("wait failed after terminating {}", service_name))?;
+    info!(service = service_name, "Windows process tree force-stopped");
     Ok(())
 }
 

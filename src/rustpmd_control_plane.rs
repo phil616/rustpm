@@ -18,6 +18,7 @@ use crate::ipc::{ControlRequest, ControlResponse, ResponseCode, RuntimeContractV
 use super::{
     ControlRuntime, DaemonRole, ServiceCommand, ServicesFacade,
 };
+static RESCAN_REQUESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub(super) async fn process_request(
     req: ControlRequest,
@@ -50,6 +51,8 @@ pub(super) async fn process_request(
             }),
         },
         ControlRequest::Rescan => {
+            let _rescan_guard = RESCAN_REQUESTS.lock().await;
+            let previous_elevated = runtime.elevated.read().await.clone();
             let local_reload = ServicesFacade::sync_services_from_config(
                 runtime.role,
                 &runtime.daemon_config_path,
@@ -81,10 +84,13 @@ pub(super) async fn process_request(
                         msg = format!("{} (primary + privd)", msg);
                     }
                     Ok(resp) => {
-                        msg = format!("{}; privd rescan failed: {}", msg, resp.message);
+                        *runtime.elevated.write().await = previous_elevated;
+                        return ControlResponse::err(resp.code, format!("{}; privd rescan failed: {}", msg, resp.message));
                     }
                     Err(err) => {
-                        msg = format!("{}; privd rescan unavailable: {}", msg, err);
+                        *runtime.elevated.write().await = previous_elevated;
+                        return ControlResponse::err(ResponseCode::DependencyUnavailable,
+                            format!("{}; privd rescan unavailable: {}", msg, err));
                     }
                 }
             }
@@ -114,8 +120,8 @@ pub(super) async fn process_request(
             }
         }
         ControlRequest::Status { service } => {
-            let elevated_set = runtime.elevated.read().await;
-            if elevated_set.contains(&service) {
+            let is_elevated = runtime.elevated.read().await.contains(&service);
+            if is_elevated {
                 return forward_result(&runtime.privd_socket, ControlRequest::Status { service }).await;
             }
             match ServicesFacade::get_view(
@@ -141,8 +147,8 @@ pub(super) async fn process_request(
             }
         }
         ControlRequest::Start { service } => {
-            let elevated_set = runtime.elevated.read().await;
-            if elevated_set.contains(&service) {
+            let is_elevated = runtime.elevated.read().await.contains(&service);
+            if is_elevated {
                 return forward_result(&runtime.privd_socket, ControlRequest::Start { service }).await;
             }
             ServicesFacade::control_service(
@@ -156,8 +162,8 @@ pub(super) async fn process_request(
             .await
         }
         ControlRequest::Stop { service } => {
-            let elevated_set = runtime.elevated.read().await;
-            if elevated_set.contains(&service) {
+            let is_elevated = runtime.elevated.read().await.contains(&service);
+            if is_elevated {
                 return forward_result(&runtime.privd_socket, ControlRequest::Stop { service }).await;
             }
             ServicesFacade::control_service(
@@ -171,8 +177,8 @@ pub(super) async fn process_request(
             .await
         }
         ControlRequest::Restart { service } => {
-            let elevated_set = runtime.elevated.read().await;
-            if elevated_set.contains(&service) {
+            let is_elevated = runtime.elevated.read().await.contains(&service);
+            if is_elevated {
                 return forward_result(&runtime.privd_socket, ControlRequest::Restart { service }).await;
             }
             ServicesFacade::control_service(
@@ -186,8 +192,8 @@ pub(super) async fn process_request(
             .await
         }
         ControlRequest::Reload { service } => {
-            let elevated_set = runtime.elevated.read().await;
-            if elevated_set.contains(&service) {
+            let is_elevated = runtime.elevated.read().await.contains(&service);
+            if is_elevated {
                 return forward_result(&runtime.privd_socket, ControlRequest::Reload { service }).await;
             }
             ServicesFacade::reload_single_service_from_file(
@@ -211,6 +217,29 @@ async fn forward_result(privd_socket: &Path, req: ControlRequest) -> ControlResp
             ResponseCode::DependencyUnavailable,
             format!("priv-helper unavailable: {}", err),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn reload_does_not_hold_elevated_route_lock_while_waiting_for_config_lock() {
+        let runtime = Arc::new(crate::rustpmd::rustpmd_state::test_control_runtime());
+        let config_guard = crate::rustpmd::rustpmd_services::SERVICE_UPDATES.lock().await;
+        let worker_runtime = Arc::clone(&runtime);
+        let request = tokio::spawn(async move {
+            process_request(ControlRequest::Reload { service: "normal".into() }, &worker_runtime).await
+        });
+        tokio::task::yield_now().await;
+        let route = timeout(Duration::from_secs(1), runtime.elevated.write()).await;
+        let writable = route.is_ok();
+        drop(route);
+        drop(config_guard);
+        request.await.unwrap();
+        assert!(writable, "rescan must be able to update routing while reload waits");
     }
 }
 
@@ -373,11 +402,10 @@ pub(super) async fn monitor_privd_health(
                         }
                     }
                     let _ = fatal_tx
-                        .send(format!(
+                        .try_send(format!(
                             "priv-helper unreachable after {} failures: {}",
                             failures, err
-                        ))
-                        .await;
+                        ));
                     return;
                 }
             }

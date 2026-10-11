@@ -1,6 +1,8 @@
 pub mod service;
 pub mod ipc;
 pub mod process;
+pub mod managed_process;
+pub mod pipe;
 
 pub mod service_adapters {
     use std::path::PathBuf;

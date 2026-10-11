@@ -33,12 +33,13 @@ pub(super) enum ControlOutcome {
 }
 
 pub(super) struct RunningChild {
-    pub(super) child: Child,
+    #[cfg(unix)]
+    pub(super) child: tokio::process::Child,
+    #[cfg(windows)]
+    pub(super) child: crate::platform::windows::managed_process::ManagedChild,
     #[allow(dead_code)]
     pub(super) pgid: i32,
     pub(super) pid_u32: u32,
-    #[cfg(windows)]
-    pub(super) job_handle: usize,
 }
 
 pub(super) struct StartedService {
@@ -64,6 +65,27 @@ pub(super) type HandleMap = Arc<RwLock<HashMap<String, mpsc::Sender<ServiceComma
 pub(super) type ElevatedSet = Arc<RwLock<HashSet<String>>>;
 pub(super) type ServiceSourceMap = Arc<RwLock<HashMap<String, PathBuf>>>;
 pub(super) type ServiceMetaMap = Arc<RwLock<HashMap<String, ServiceMeta>>>;
+
+#[cfg(test)]
+pub(super) fn test_control_runtime() -> ControlRuntime {
+    let provider = DefaultRuntimePolicyProvider;
+    ControlRuntime {
+        handles: Arc::new(RwLock::new(HashMap::new())),
+        state: Arc::new(RwLock::new(HashMap::new())),
+        elevated: Arc::new(RwLock::new(HashSet::new())),
+        service_sources: Arc::new(RwLock::new(HashMap::new())),
+        service_meta: Arc::new(RwLock::new(HashMap::new())),
+        privd_socket: PathBuf::new(), daemon_config_path: PathBuf::new(), socket_path: PathBuf::new(),
+        role: DaemonRole::Primary,
+        policies: provider.policies(),
+        contract: RuntimeContract::new(ConfigSchemaVersion::V1, provider.provider_name()),
+        startup_policy: ServiceStartupPolicy {
+            first_start_not_before: Instant::now() + Duration::from_secs(30),
+            spin_interval: Duration::ZERO,
+            spin_gate: Arc::new(tokio::sync::Mutex::new(Instant::now())),
+        },
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct ServiceMeta {

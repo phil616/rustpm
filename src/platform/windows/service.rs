@@ -68,21 +68,21 @@ impl Default for SERVICE_STATUS {
     }
 }
 
-const SC_MANAGER_ALL_ACCESS: u32 = 0xF01FF;
-const SERVICE_ALL_ACCESS: u32 = 0xF01FF;
-const SERVICE_WIN32_OWN_PROCESS: u32 = 0x00000010;
-const SERVICE_DEMAND_START: u32 = 0x00000003;
-const SERVICE_ERROR_NORMAL: u32 = 0x00000001;
-const SERVICE_CONTROL_STOP: u32 = 0x00000013;
-const SERVICE_CONTROL_SHUTDOWN: u32 = 0x00000005;
-const SERVICE_STOPPED: u32 = 0x00000001;
-const SERVICE_RUNNING: u32 = 0x00000004;
-const SERVICE_START_PENDING: u32 = 0x00000002;
-const SERVICE_STOP_PENDING: u32 = 0x00000006;
-const SERVICE_ACCEPT_STOP: u32 = 0x00000020;
-const SERVICE_ACCEPT_SHUTDOWN: u32 = 0x00000040;
-const SERVICE_CONFIG_FAILURE_ACTIONS: u32 = 0x00000002;
-const SC_ACTION_RESTART: u32 = 0x00000001;
+const SC_MANAGER_ALL_ACCESS: u32 = windows::Win32::System::Services::SC_MANAGER_ALL_ACCESS;
+const SERVICE_ALL_ACCESS: u32 = windows::Win32::System::Services::SERVICE_ALL_ACCESS;
+const SERVICE_WIN32_OWN_PROCESS: u32 = windows::Win32::System::Services::SERVICE_WIN32_OWN_PROCESS.0;
+const SERVICE_DEMAND_START: u32 = windows::Win32::System::Services::SERVICE_DEMAND_START.0;
+const SERVICE_ERROR_NORMAL: u32 = windows::Win32::System::Services::SERVICE_ERROR_NORMAL.0;
+const SERVICE_CONTROL_STOP: u32 = windows::Win32::System::Services::SERVICE_CONTROL_STOP;
+const SERVICE_CONTROL_SHUTDOWN: u32 = windows::Win32::System::Services::SERVICE_CONTROL_SHUTDOWN;
+const SERVICE_STOPPED: u32 = windows::Win32::System::Services::SERVICE_STOPPED.0;
+const SERVICE_RUNNING: u32 = windows::Win32::System::Services::SERVICE_RUNNING.0;
+const SERVICE_START_PENDING: u32 = windows::Win32::System::Services::SERVICE_START_PENDING.0;
+const SERVICE_STOP_PENDING: u32 = windows::Win32::System::Services::SERVICE_STOP_PENDING.0;
+const SERVICE_ACCEPT_STOP: u32 = windows::Win32::System::Services::SERVICE_ACCEPT_STOP;
+const SERVICE_ACCEPT_SHUTDOWN: u32 = windows::Win32::System::Services::SERVICE_ACCEPT_SHUTDOWN;
+const SERVICE_CONFIG_FAILURE_ACTIONS: u32 = windows::Win32::System::Services::SERVICE_CONFIG_FAILURE_ACTIONS.0;
+const SC_ACTION_RESTART: u32 = windows::Win32::System::Services::SC_ACTION_RESTART.0 as u32;
 
 #[repr(C)]
 struct SC_ACTION {
@@ -99,16 +99,27 @@ struct SERVICE_FAILURE_ACTIONS {
     sc_lpsaActions: *const SC_ACTION,
 }
 
+static ACTIVE_SERVICE_NAME: OnceLock<&'static str> = OnceLock::new();
 static SERVICE_HANDLE: AtomicUsize = AtomicUsize::new(0);
 static SERVICE_CHECKPOINT: AtomicU32 = AtomicU32::new(0);
+static SERVICE_STATE: std::sync::Mutex<u32> = std::sync::Mutex::new(SERVICE_STOPPED);
 static SERVICE_STOP_TX: OnceLock<watch::Sender<bool>> = OnceLock::new();
 static DAEMON_RUNNER: OnceLock<std::sync::Mutex<Option<Box<dyn FnOnce() -> Result<()> + Send>>>> = OnceLock::new();
 
-fn set_service_status(state: u32, exit_code: u32) {
+fn set_service_status(state: u32, exit_code: u32) -> Result<()> {
+    let mut current = SERVICE_STATE.lock().map_err(|_| anyhow!("service status lock poisoned"))?;
+    // STOP and readiness can arrive concurrently; never move back to RUNNING.
+    if *current == SERVICE_STOP_PENDING && state == SERVICE_RUNNING { return Ok(()); }
+    publish_service_status(state, exit_code)?;
+    *current = state;
+    Ok(())
+}
+
+fn publish_service_status(state: u32, exit_code: u32) -> Result<()> {
     let handle = SERVICE_HANDLE.load(Ordering::SeqCst) as isize;
-    if handle == 0 { return; }
+    if handle == 0 { return Ok(()); }
     let checkpoint = if state == SERVICE_STOP_PENDING || state == SERVICE_START_PENDING {
-        SERVICE_CHECKPOINT.fetch_add(1, Ordering::SeqCst)
+        SERVICE_CHECKPOINT.fetch_add(1, Ordering::SeqCst) + 1
     } else {
         0
     };
@@ -121,32 +132,8 @@ fn set_service_status(state: u32, exit_code: u32) {
         dwCheckPoint: checkpoint,
         dwWaitHint: if state == SERVICE_START_PENDING || state == SERVICE_STOP_PENDING { 30000 } else { 0 },
     };
-    unsafe { SetServiceStatus(handle, &status); }
-}
-
-fn start_progress_reporter() {
-    let handle = SERVICE_HANDLE.load(Ordering::SeqCst) as isize;
-    if handle == 0 { return; }
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            let state = SERVICE_CHECKPOINT.load(Ordering::SeqCst);
-            if state == u32::MAX {
-                break;
-            }
-            let cp = SERVICE_CHECKPOINT.fetch_add(1, Ordering::SeqCst);
-            let status = SERVICE_STATUS {
-                dwServiceType: SERVICE_WIN32_OWN_PROCESS,
-                dwCurrentState: SERVICE_STOP_PENDING,
-                dwControlsAccepted: 0,
-                dwWin32ExitCode: 0,
-                dwServiceSpecificExitCode: 0,
-                dwCheckPoint: cp + 1,
-                dwWaitHint: 30000,
-            };
-            unsafe { SetServiceStatus(handle, &status); }
-        }
-    });
+    if unsafe { SetServiceStatus(handle, &status) } == 0 { return Err(std::io::Error::last_os_error().into()); }
+    Ok(())
 }
 
 unsafe extern "system" fn service_ctrl_handler(
@@ -157,10 +144,12 @@ unsafe extern "system" fn service_ctrl_handler(
 ) -> u32 {
     match dw_control {
         SERVICE_CONTROL_STOP | SERVICE_CONTROL_SHUTDOWN => {
-            set_service_status(SERVICE_STOP_PENDING, 0);
-            start_progress_reporter();
+            if let Err(err) = set_service_status(SERVICE_STOP_PENDING, 0) {
+                tracing::error!(%err, "failed to report stop pending");
+            }
+
             if let Some(tx) = SERVICE_STOP_TX.get() {
-                let _ = tx.send(true);
+                tx.send_replace(true);
             }
             0
         }
@@ -174,12 +163,22 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *const u16) {
     let (stop_tx, _) = watch::channel(false);
     let _ = SERVICE_STOP_TX.set(stop_tx);
 
-    let name_wide: Vec<u16> = SERVICE_NAME.encode_utf16().chain(std::iter::once(0)).collect();
+    let name_wide: Vec<u16> = ACTIVE_SERVICE_NAME.get().copied().unwrap_or(SERVICE_NAME).encode_utf16().chain(std::iter::once(0)).collect();
     let handle = RegisterServiceCtrlHandlerExW(name_wide.as_ptr(), service_ctrl_handler, std::ptr::null_mut());
+    if handle == 0 { tracing::error!(error = %std::io::Error::last_os_error(), "RegisterServiceCtrlHandlerExW failed"); return; }
     SERVICE_HANDLE.store(handle as usize, Ordering::SeqCst);
 
-    set_service_status(SERVICE_START_PENDING, 0);
-    set_service_status(SERVICE_RUNNING, 0);
+    if let Err(err) = set_service_status(SERVICE_START_PENDING, 0) { tracing::error!(%err, "service status failed"); return; }
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let Ok(state) = SERVICE_STATE.lock() else { break; };
+        if *state == SERVICE_STOPPED { break; }
+        if *state == SERVICE_START_PENDING || *state == SERVICE_STOP_PENDING {
+            if let Err(err) = publish_service_status(*state, 0) {
+                tracing::error!(%err, "failed to report pending service progress");
+            }
+        }
+    });
 
     let result = {
         let cell = DAEMON_RUNNER.get_or_init(|| std::sync::Mutex::new(None));
@@ -200,9 +199,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *const u16) {
         }
     };
 
-    // Signal progress reporter to stop
-    SERVICE_CHECKPOINT.store(u32::MAX, Ordering::SeqCst);
-    set_service_status(SERVICE_STOPPED, exit_code);
+    if let Err(err) = set_service_status(SERVICE_STOPPED, exit_code) { tracing::error!(%err, "service status failed"); }
 }
 
 pub fn run_as_service<F>(service_name: &'static str, daemon_fn: F) -> Result<()>
@@ -216,13 +213,14 @@ where
     }
 
     let name_wide: Vec<u16> = service_name.encode_utf16().chain(std::iter::once(0)).collect();
-    let entry = SERVICE_TABLE_ENTRY {
+    ACTIVE_SERVICE_NAME.set(service_name).map_err(|_| anyhow!("service dispatcher already initialized"))?;
+    let entries = [SERVICE_TABLE_ENTRY {
         lpServiceName: name_wide.as_ptr(),
         lpServiceProc: Some(service_main),
-    };
+    }, SERVICE_TABLE_ENTRY { lpServiceName: std::ptr::null(), lpServiceProc: None }];
 
     unsafe {
-        let ret = StartServiceCtrlDispatcherW(&entry);
+        let ret = StartServiceCtrlDispatcherW(entries.as_ptr());
         if ret == 0 {
             Err(anyhow!("StartServiceCtrlDispatcherW failed"))
         } else {
@@ -433,4 +431,10 @@ pub fn service_exists() -> bool {
             false
         }
     }
+}
+
+/// Report readiness only after listeners have been created successfully.
+pub fn report_ready() -> Result<()> {
+    if SERVICE_STOP_TX.get().is_some_and(|tx| *tx.borrow()) { return Ok(()); }
+    set_service_status(SERVICE_RUNNING, 0)
 }

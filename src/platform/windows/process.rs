@@ -6,62 +6,40 @@ use crate::platform::PlatformProcessManager;
 
 pub struct WindowsProcessManager;
 
+fn groups() -> &'static std::sync::Mutex<std::collections::HashMap<u64, super::managed_process::OwnedHandle>> {
+    static GROUPS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u64, super::managed_process::OwnedHandle>>> = std::sync::OnceLock::new();
+    GROUPS.get_or_init(Default::default)
+}
+
 impl PlatformProcessManager for WindowsProcessManager {
     fn create_process_group(&self) -> Result<u64> {
-        Err(anyhow!("Job Objects not yet implemented"))
+        let job = super::managed_process::create_job()?;
+        let id = job.0 as u64;
+        groups().lock().map_err(|_| anyhow!("job registry poisoned"))?.insert(id, job);
+        Ok(id)
     }
 
-    fn assign_to_group(&self, _pid: u32, _group_id: u64) -> Result<()> {
-        Err(anyhow!("Job Objects not yet implemented"))
+    fn assign_to_group(&self, pid: u32, group_id: u64) -> Result<()> {
+        use windows::Win32::System::{Threading::*, JobObjects::AssignProcessToJobObject};
+        let guard = groups().lock().map_err(|_| anyhow!("job registry poisoned"))?;
+        let job = guard.get(&group_id).ok_or_else(|| anyhow!("unknown process group"))?;
+        unsafe {
+            let process = super::managed_process::OwnedHandle(OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid)?.0 as usize);
+            AssignProcessToJobObject(job.raw(), process.raw())?;
+        }
+        Ok(())
     }
 
-    fn terminate_group(&self, _group_id: u64, _exit_code: u32) -> Result<()> {
-        Err(anyhow!("Job Objects not yet implemented"))
+    fn terminate_group(&self, group_id: u64, exit_code: u32) -> Result<()> {
+        let job = groups().lock().map_err(|_| anyhow!("job registry poisoned"))?.remove(&group_id)
+            .ok_or_else(|| anyhow!("unknown process group"))?;
+        unsafe { windows::Win32::System::JobObjects::TerminateJobObject(job.raw(), exit_code)?; }
+        Ok(())
     }
 
     fn spawn_as_user(&self, cmd: &str, args: &[String], _user: &str, cwd: Option<&PathBuf>) -> Result<u32> {
-        let mut cmd_line = cmd.to_string();
-        for arg in args {
-            cmd_line.push(' ');
-            cmd_line.push_str(arg);
-        }
-
-        let mut startup_info: windows::Win32::System::Threading::STARTUPINFOW = unsafe { std::mem::zeroed() };
-        startup_info.cb = std::mem::size_of::<windows::Win32::System::Threading::STARTUPINFOW>() as u32;
-        let mut process_info: windows::Win32::System::Threading::PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-
-        let cmd_wide: Vec<u16> = cmd_line.encode_utf16().chain(std::iter::once(0)).collect();
-
-        let cwd_wide: Option<Vec<u16>> = cwd.map(|p| p.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect());
-        let cwd_ptr = cwd_wide
-            .as_ref()
-            .map(|v| windows::core::PCWSTR(v.as_ptr()))
-            .unwrap_or(windows::core::PCWSTR(std::ptr::null()));
-
-        unsafe {
-            let result = windows::Win32::System::Threading::CreateProcessW(
-                None,
-                windows::core::PWSTR(cmd_wide.as_ptr() as *mut u16),
-                None,
-                None,
-                false,
-                windows::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP,
-                None,
-                cwd_ptr,
-                &startup_info,
-                &mut process_info,
-            );
-
-            match result {
-                Ok(()) => {
-                    let pid = process_info.dwProcessId;
-                    let _ = windows::Win32::Foundation::CloseHandle(process_info.hThread);
-                    let _ = windows::Win32::Foundation::CloseHandle(process_info.hProcess);
-                    Ok(pid)
-                }
-                Err(e) => Err(anyhow!("failed to create process: {}", e)),
-            }
-        }
+        let _ = (cmd, args, cwd);
+        Err(anyhow!("PID-only spawn cannot safely own a process tree or switch credentials; use spawn_managed"))
     }
 }
 

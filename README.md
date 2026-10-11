@@ -95,7 +95,8 @@ Build from source (with manual service registration):
 cargo build --release
 
 # Install as Windows Service
-rustpmd.exe install --config "C:\Program Files\rustpm\config\rustpmd.conf"
+.\scripts\build_msi.ps1
+# Install the resulting MSI to register both services.
 ```
 
 Service management:
@@ -178,6 +179,7 @@ Supported keys:
   - `root` or `Administrator` is treated as `privilege=elevated`
   - for `privilege=normal`, a local non-root account can be specified and rustpm will spawn the service with that user identity on Unix
 - `privilege` (`normal` or `elevated`)
+- `autostart` (`true` by default; `false` allows manual startup)
 - `startsecs`
 - `autorestart`
 - `redirect_stderr`
@@ -194,7 +196,7 @@ socket = /usr/local/var/run/rustpm/rustpmd.sock
 privd_socket = /usr/local/var/run/rustpm/rustpm-privd.sock
 
 [web]
-enabled = true
+enabled = false
 bind = 127.0.0.1
 port = 18765
 expose = false
@@ -209,7 +211,7 @@ service_start_delay_secs = 30
 service_start_spin_interval_secs = 1
 ```
 
-Web is enabled by default, with default password `password` (recommended to change immediately in production).
+Web is disabled by default. Configure a private password hash before enabling it.
 Detailed security and API behavior: [docs/security-api.md](docs/security-api.md).
 
 ### Windows (supported)
@@ -219,7 +221,7 @@ Detailed security and API behavior: [docs/security-api.md](docs/security-api.md)
 Default locations:
 - Daemon config: `C:\Program Files\rustpm\config\rustpmd.conf`
 - Programs config: `C:\Program Files\rustpm\config\programs.d\`
-- Logs: `C:\Program Files\rustpm\logs\`
+- Logs: `C:\ProgramData\rustpm\logs\`
 - IPC pipe: `\\.\pipe\rustpmd`
 - Privd pipe: `\\.\pipe\rustpm-privd`
 
@@ -229,15 +231,15 @@ Program config format (`programs.d\*.conf`):
 [program:example]
 directory = C:\Users\admin\example
 command = C:\Users\admin\example\bin\example.exe -c C:\Users\admin\example\config.ini
-user = Administrator
+# Elevated tasks use the rustpm-privd service identity; omit user.
 privilege = elevated
 startsecs = 3
 autorestart = true
 redirect_stderr = true
 stdout_logfile_maxbytes = 50MB
 stdout_logfile_backups = 10
-stdout_logfile = C:\Program Files\rustpm\logs\%(program_name)s.log
-stderr_logfile = C:\Program Files\rustpm\logs\%(program_name)s-error.log
+stdout_logfile = C:\ProgramData\rustpm\logs\%(program_name)s.log
+stderr_logfile = C:\ProgramData\rustpm\logs\%(program_name)s-error.log
 ```
 
 If a Windows command path or argument contains spaces (for example `C:\Program Files\...`),
@@ -252,9 +254,10 @@ Supported keys (same as macOS):
 - `directory`
 - `command`
 - `user`:
-  - `Administrator` is treated as `privilege=elevated`
-  - for `privilege=normal`, a local non-admin account can be specified
+  - `privilege=normal` defaults to `LocalService` with medium integrity; `LocalService` and `NetworkService` are supported.
+  - Other accounts require credentials and are rejected. Elevated tasks must omit `user` and use the helper service identity.
 - `privilege` (`normal` or `elevated`)
+- `autostart` (`true` by default; `false` allows manual startup)
 - `startsecs`
 - `autorestart`
 - `redirect_stderr`
@@ -271,7 +274,7 @@ socket = \\.\pipe\rustpmd
 privd_socket = \\.\pipe\rustpm-privd
 
 [web]
-enabled = true
+enabled = false
 bind = 127.0.0.1
 port = 18765
 expose = false
@@ -419,8 +422,8 @@ autorestart = true
 redirect_stderr = true
 stdout_logfile_maxbytes = 50MB
 stdout_logfile_backups = 10
-stdout_logfile = C:\Program Files\rustpm\logs\myservice.log
-stderr_logfile = C:\Program Files\rustpm\logs\myservice-error.log
+stdout_logfile = C:\ProgramData\rustpm\logs\myservice.log
+stderr_logfile = C:\ProgramData\rustpm\logs\myservice-error.log
 "@
 
 # Restart the service to pick up new config
@@ -474,10 +477,10 @@ Service/runtime logs:
 
 ```powershell
 # View recent log entries
-Get-Content -Tail 200 "C:\Program Files\rustpm\logs\myservice.log"
-Get-Content -Tail 200 "C:\Program Files\rustpm\logs\myservice-error.log"
-Get-Content -Tail 200 "C:\Program Files\rustpm\logs\rustpm.log"
-Get-Content -Tail 200 "C:\Program Files\rustpm\logs\rustpm-privd.log"
+Get-Content -Tail 200 "C:\ProgramData\rustpm\logs\myservice.log"
+Get-Content -Tail 200 "C:\ProgramData\rustpm\logs\myservice-error.log"
+Get-Content -Tail 200 "C:\ProgramData\rustpm\logs\rustpm.log"
+Get-Content -Tail 200 "C:\ProgramData\rustpm\logs\rustpm-privd.log"
 ```
 
 Debug mode (run in foreground for troubleshooting):
@@ -548,7 +551,7 @@ Manual cleanup (if needed):
 Remove-Item -Recurse -Force "C:\Program Files\rustpm\config"
 
 # Remove logs directory
-Remove-Item -Recurse -Force "C:\Program Files\rustpm\logs"
+Remove-Item -Recurse -Force "C:\ProgramData\rustpm\logs"
 
 # Remove installation directory
 Remove-Item -Recurse -Force "C:\Program Files\rustpm"
@@ -557,3 +560,8 @@ Remove-Item -Recurse -Force "C:\Program Files\rustpm"
 ### OpenWrt (planned)
 
 Uninstall workflow is not released yet.
+
+Windows background tasks currently use force-stop mode via Job Objects. The entire task tree is terminated; stop_grace_secs does not provide graceful shutdown on Windows. Configure application cleanup externally when required.
+Deleting a task configuration and running rescan now stops and unregisters that task. Reload waits for the old actor and its process tree before launching the replacement.
+Windows CLI control requires an elevated administrator session; named pipes allow only SYSTEM and administrators.
+An invalid configuration edit makes rescan fail while existing tasks remain registered. To change a task's privilege ownership, remove its configuration and complete a successful rescan before adding it with the new privilege.

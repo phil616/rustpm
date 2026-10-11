@@ -21,6 +21,9 @@ sha2 = "0.10"
 rand = "0.8"
 argon2 = "0.5"
 
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", default-features = false, features = ["signal", "process", "user"] }
 
@@ -29,9 +32,13 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
     "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Console",
+    "Win32_System_Environment",
     "Win32_System_JobObjects",
     "Win32_System_IO",
     "Win32_System_ProcessStatus",
     "Win32_System_Services",
+    "Win32_System_SystemServices",
     "Win32_Networking_WinSock",
 ] }
