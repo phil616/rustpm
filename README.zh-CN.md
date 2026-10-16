@@ -38,12 +38,12 @@
 构建：
 
 ```bash
-chmod +x scripts/build_pkg.sh packaging/postinstall
+chmod +x scripts/build_pkg.sh packaging/preinstall packaging/postinstall
 ./scripts/build_pkg.sh
 ```
 
 产物：
-- `dist/rustpm-0.1.4-unsigned.pkg`
+- `dist/rustpm-0.1.5-unsigned.pkg`
 
 方案 B：安装预构建 pkg
 
@@ -52,12 +52,13 @@ chmod +x scripts/build_pkg.sh packaging/postinstall
 安装命令：
 
 ```bash
-sudo installer -pkg dist/rustpm-0.1.4-unsigned.pkg -target /
+sudo installer -pkg dist/rustpm-0.1.5-unsigned.pkg -target /
 ```
 
 安装默认行为：
 - `/usr/local/etc/rustpm/programs.d/example.conf` 以注释模板形式安装。
 - 默认不启用任何真实业务服务。
+- `/usr/local/bin/rustpmctl` 软链接指向 `../lib/rustpm/rustpmctl`；若已有其他同名入口，安装会终止，避免覆盖。卸载脚本仅删除目标匹配的软链接。
 - 安全默认值：
   - `/usr/local/etc/rustpm/rustpmd.conf` 权限 `600`（仅 root）
   - `/usr/local/etc/rustpm/programs.d` 权限 `700`（仅 root）
@@ -79,18 +80,22 @@ MSI 安装（推荐）：
 # 构建 MSI（需要 WiX Toolset）
 .\scripts\build_msi.ps1
 
-# 双击 dist\rustpm-0.1.4-x64.msi 即可安装
+# 双击 dist\rustpm-0.1.5-x64.msi 即可安装
 # Windows 会自动弹出 UAC 提权窗口。
 
 # 或命令行（必须在管理员 PowerShell 中运行）：
-msiexec /i dist\rustpm-0.1.4-x64.msi
+msiexec /i dist\rustpm-0.1.5-x64.msi
 
 # 静默安装（必须在管理员 PowerShell 中运行）：
-msiexec /i dist\rustpm-0.1.4-x64.msi /quiet
+msiexec /i dist\rustpm-0.1.5-x64.msi /quiet
 
 # 卸载：
-msiexec /x dist\rustpm-0.1.4-x64.msi
+msiexec /x dist\rustpm-0.1.5-x64.msi
 ```
+
+MSI 将专用 `cli` 目录（默认 `C:\Program Files\rustpm\cli`）追加到系统 PATH。该目录包含安装包提供的 `rustpmctl.exe` 副本，原有 CLI 和守护进程位置保留。MSI 在修复、升级和卸载时管理此 PATH 项。手工配置 PATH 时请使用原有安装目录，避免使用安装包专用的 `cli` 目录：卸载时 MSI 无法区分手工添加的相同项。
+
+安装后关闭并重新打开 PowerShell/cmd。必要时完全退出并重启 Windows Terminal；新标签页仍可能继承父进程的旧环境。
 
 从源码构建（手动注册服务）：
 
@@ -120,21 +125,46 @@ Stop-Service -Name rustpm
 # msiexec /x C:\path\to\rustpm-<version>-x64.msi
 ```
 
+### 验证 CLI 命令发现
+
+在新终端的任意目录运行 `rustpmctl --help`，再使用所需权限运行 `rustpmctl list`（Windows 使用管理员终端，macOS 使用 `sudo rustpmctl list`）。PATH 仅负责查找命令，不会授予服务控制权限或绕过命名管道/socket 的访问检查。
+
+Windows 排查：
+
+```powershell
+Get-Command rustpmctl -All
+where.exe rustpmctl
+[Environment]::GetEnvironmentVariable("Path", "Machine")
+# 找不到命令或 PATH 前面存在其他同名命令时：
+& "C:\Program Files\rustpm\rustpmctl.exe" --help
+```
+
+macOS 排查：
+
+```bash
+command -v rustpmctl
+ls -l /usr/local/bin/rustpmctl
+echo "$PATH"
+/usr/local/lib/rustpm/rustpmctl --help
+```
+
+自定义 shell 或 `sudo` 环境可能不包含 `/usr/local/bin`，此时使用完整路径。pkg 不修改 shell 配置文件。
+
 ### GitHub Releases（Windows amd64）
 
 [发布工作流](.github/workflows/release.yml) 只构建 Windows amd64 MSI，
-并上传到对应的 GitHub Release。`v0.1.4` 的产物为 `rustpm-0.1.4-x64.msi`。
+并上传到对应的 GitHub Release。`v0.1.5` 的产物为 `rustpm-0.1.5-x64.msi`。
 
 提交并推送工作流及打包修改后，推送版本标签即可触发：
 
 ```bash
-git tag v0.1.4
-git push origin v0.1.4
+git tag v0.1.5
+git push origin v0.1.5
 ```
 
 CI 在临时检出目录中使用标签统一 Cargo 包版本、MSI 内部版本和注册表版本，依赖版本保持锁定。
 如需重跑已有标签，可打开 **Actions → Release Windows MSI → Run workflow**，
-默认标签为 `v0.1.4`，选择 `main` 分支可用最新工作流修复重跑已有标签。
+默认标签为 `v0.1.5`，选择 `main` 分支可用最新工作流修复重跑已有标签。
 标签指向的提交必须包含上述打包修改。
 无需额外配置仓库 Secret，工作流使用具备 `contents: write` 权限的 `GITHUB_TOKEN` 发布。
 

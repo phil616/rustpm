@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+# Installer passes the target volume as $3. Check before unpacking the payload,
+# including dangling symlinks, and allow reinstalling only our expected link.
+TARGET_VOLUME="${3:-/}"
+CLI_LINK="${TARGET_VOLUME%/}/usr/local/bin/rustpmctl"
+if [ -e "$CLI_LINK" ] || [ -L "$CLI_LINK" ]; then
+  if [ -L "$CLI_LINK" ] && [ "$(readlink "$CLI_LINK")" = "../lib/rustpm/rustpmctl" ]; then
+    exit 0
+  fi
+  echo "preinstall: refusing to replace existing $CLI_LINK; move it aside before installing rustpm" >&2
+  exit 1
+fi

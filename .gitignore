@@ -3,3 +3,4 @@
 .cargo-home
 .rustup-home
 .DS_Store
+__pycache__/

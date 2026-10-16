@@ -1,8 +1,10 @@
-# v0.1.4
+# v0.1.5
 
-- Fix MSI service recovery configuration by replacing the Windows Installer native failure-actions table with WiX Util service configuration.
-- Preserve automatic restart for both Windows services: a five-second delay and a one-day failure-count reset period.
-- Automatically install the Util extension matching WiX Toolset v5 during MSI builds.
-- Update package versions and installation instructions to 0.1.4.
+- Windows MSI now appends a dedicated, package-owned `cli` directory to machine PATH, making `rustpmctl` available by name in new terminals. The original CLI and service binary locations remain available.
+- macOS pkg now includes `/usr/local/bin/rustpmctl` as a relative symlink. Installation refuses to overwrite an unrelated entry, and uninstall removes only the expected symlink.
+- Add packaging regression tests, compiled MSI table checks, and English/Chinese command discovery diagnostics.
+- Related issue: #1. The issue remains open pending installation and lifecycle testing.
 
-Validation: 65 Rust tests passed; the Windows debug MSI built successfully and its recovery configuration tables were verified. Actual service installation still requires verification on a target Windows machine with administrator privileges. The MSI is unsigned.
+After Windows installation, fully close and reopen PowerShell/cmd or Windows Terminal before running `rustpmctl --help`. Service-control operations still require the appropriate permissions. Do not manually add the package-owned `cli` directory to PATH; use the original installation directory for manual entries.
+
+Validation: packaging regression tests and ShellCheck passed; the Windows MSI built successfully and its CLI/PATH tables were verified. Clean-machine installation, upgrades, repair, uninstall and rollback still require validation. The MSI is unsigned. The release asset is the Windows x64 MSI; macOS pkg can be built from source.

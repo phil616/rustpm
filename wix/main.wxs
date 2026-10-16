@@ -2,7 +2,7 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <?ifndef ProductVersion ?>
-    <?define ProductVersion = "0.1.4" ?>
+    <?define ProductVersion = "0.1.5" ?>
   <?endif ?>
   <?ifndef BinaryDir ?>
     <?define BinaryDir = "..\target\release" ?>
@@ -17,10 +17,10 @@
 
        Double-click the .msi to install (UAC elevation prompt).
        Or command-line:
-         msiexec /i rustpm-0.1.4-x64.msi                    (GUI)
-         msiexec /i rustpm-0.1.4-x64.msi /quiet /norestart   (silent)
-         msiexec /x rustpm-0.1.4-x64.msi                     (uninstall)
-         msiexec /i rustpm-0.1.4-x64.msi /f                 (repair)
+         msiexec /i rustpm-0.1.5-x64.msi                    (GUI)
+         msiexec /i rustpm-0.1.5-x64.msi /quiet /norestart   (silent)
+         msiexec /x rustpm-0.1.5-x64.msi                     (uninstall)
+         msiexec /i rustpm-0.1.5-x64.msi /f                 (repair)
   ============================================================ -->
 
   <Package Name="rustpm"
@@ -45,6 +45,7 @@
 
     <Feature Id="MainFeature" Title="rustpm" Level="1">
       <ComponentGroupRef Id="Binaries" />
+      <ComponentGroupRef Id="CliEntryPoint" />
       <ComponentGroupRef Id="Config" />
       <ComponentGroupRef Id="ProgramsDirGroup" />
       <ComponentGroupRef Id="Cleanup" />
@@ -55,6 +56,7 @@
     <!-- ====== Directory Structure ====== -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="rustpm">
+        <Directory Id="CliDir" Name="cli" />
         <Directory Id="ConfigDir" Name="config">
           <Directory Id="ProgramsDir" Name="programs.d" />
         </Directory>
@@ -130,6 +132,22 @@
       <!-- rustpmctl (no service) -->
       <Component Id="cmpRustpmctlExe" Guid="{22345678-ABCD-4DEF-9012-34567890ABCD}">
         <File Id="rustpmctlExe" Source="$(BinaryDir)\rustpmctl.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- A package-owned CLI directory keeps user PATH entries for INSTALLFOLDER
+         outside our ownership and exposes only the management command. Keep
+         the original CLI component and its key path unchanged for upgrades. -->
+    <ComponentGroup Id="CliEntryPoint" Directory="CliDir">
+      <Component Id="cmpCliEntryPoint" Guid="{D687FC63-D793-4DBA-9B62-9F18C7FDF521}">
+        <File Id="CliEntryPointExe" Source="$(BinaryDir)\rustpmctl.exe" KeyPath="yes" />
+        <RemoveFolder Id="RemoveCliDir" On="uninstall" />
+      </Component>
+      <Component Id="cmpRustpmctlPath" Guid="{C4B7D5F1-7F9B-4E87-9DAE-2E9A18D43652}">
+        <RegistryValue Id="regCliPathInstalled" Root="HKLM" Key="SOFTWARE\rustpm" Name="CliPathInstalled"
+                       Type="integer" Value="1" KeyPath="yes" />
+        <Environment Id="RustpmCtlPath" Name="PATH" Value="[CliDir]"
+                     Action="set" Part="last" System="yes" Permanent="no" />
       </Component>
     </ComponentGroup>
 

@@ -19,6 +19,7 @@ Each platform adapter preserves the same `rustpmd` / `rustpm-privd` responsibili
 - Binary: `/usr/local/lib/rustpm/rustpmd`
 - Priv helper: `/usr/local/lib/rustpm/rustpm-privd`
 - Control CLI: `/usr/local/lib/rustpm/rustpmctl`
+- CLI entry point: `/usr/local/bin/rustpmctl` (relative symlink to `../lib/rustpm/rustpmctl`, included in the pkg payload)
 - Daemon config: `/usr/local/etc/rustpm/rustpmd.conf`
 - Program config dir: `/usr/local/etc/rustpm/programs.d`
 - Bootstrap: `/Library/LaunchDaemons/club.motofans.rustpm.plist`
@@ -30,6 +31,7 @@ Each platform adapter preserves the same `rustpmd` / `rustpm-privd` responsibili
 - Binary: `C:\Program Files\rustpm\rustpmd.exe`
 - Priv helper: `C:\Program Files\rustpm\rustpm-privd.exe`
 - Control CLI: `C:\Program Files\rustpm\rustpmctl.exe`
+- CLI entry point: `C:\Program Files\rustpm\cli\rustpmctl.exe` (packaged copy; MSI appends the actual `cli` directory to machine PATH and removes that entry on uninstall)
 - Daemon config: `C:\Program Files\rustpm\config\rustpmd.conf`
 - Program config dir: `C:\Program Files\rustpm\config\programs.d`
 - Bootstrap: Windows Service (SCM) with auto-start

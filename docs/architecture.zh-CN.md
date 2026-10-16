@@ -19,6 +19,7 @@
 - 二进制：`/usr/local/lib/rustpm/rustpmd`
 - 特权助手：`/usr/local/lib/rustpm/rustpm-privd`
 - 控制 CLI：`/usr/local/lib/rustpm/rustpmctl`
+- CLI 命令入口：`/usr/local/bin/rustpmctl`（pkg 载荷中的相对软链接，指向 `../lib/rustpm/rustpmctl`）
 - 守护配置：`/usr/local/etc/rustpm/rustpmd.conf`
 - 服务配置目录：`/usr/local/etc/rustpm/programs.d`
 - 引导：`/Library/LaunchDaemons/club.motofans.rustpm.plist`
@@ -30,6 +31,7 @@
 - 二进制：`C:\Program Files\rustpm\rustpmd.exe`
 - 特权助手：`C:\Program Files\rustpm\rustpm-privd.exe`
 - 控制 CLI：`C:\Program Files\rustpm\rustpmctl.exe`
+- CLI 命令入口：`C:\Program Files\rustpm\cli\rustpmctl.exe`（安装包副本；MSI 将实际 `cli` 目录追加到系统 PATH，卸载时移除该项）
 - 守护配置：`C:\Program Files\rustpm\config\rustpmd.conf`
 - 服务配置目录：`C:\Program Files\rustpm\config\programs.d`
 - 引导：Windows 服务（SCM）自动启动

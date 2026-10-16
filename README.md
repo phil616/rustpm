@@ -36,12 +36,12 @@ Recommended installation source:
 Build:
 
 ```bash
-chmod +x scripts/build_pkg.sh packaging/postinstall
+chmod +x scripts/build_pkg.sh packaging/preinstall packaging/postinstall
 ./scripts/build_pkg.sh
 ```
 
 Generated package:
-- `dist/rustpm-0.1.4-unsigned.pkg`
+- `dist/rustpm-0.1.5-unsigned.pkg`
 
 Option B: install a prebuilt pkg
 
@@ -50,12 +50,13 @@ If you already have a prebuilt pkg (from CI/artifacts or from another machine), 
 Install:
 
 ```bash
-sudo installer -pkg dist/rustpm-0.1.4-unsigned.pkg -target /
+sudo installer -pkg dist/rustpm-0.1.5-unsigned.pkg -target /
 ```
 
 Installer defaults:
 - `/usr/local/etc/rustpm/programs.d/example.conf` is installed as a commented template.
 - No real business service is enabled by default.
+- `/usr/local/bin/rustpmctl` links to `../lib/rustpm/rustpmctl`; installation refuses to overwrite a different existing entry. The uninstaller removes only this expected symlink.
 - Security defaults:
   - `/usr/local/etc/rustpm/rustpmd.conf` mode `600` (root-only)
   - `/usr/local/etc/rustpm/programs.d` mode `700` (root-only)
@@ -77,18 +78,22 @@ Building requires WiX Toolset v5. The build script downloads the matching Util e
 # Build MSI (requires WiX Toolset)
 .\scripts\build_msi.ps1
 
-# Double-click dist\rustpm-0.1.4-x64.msi to install
+# Double-click dist\rustpm-0.1.5-x64.msi to install
 # Windows will show UAC elevation prompt automatically.
 
 # Or command-line (must run from elevated/admin PowerShell):
-msiexec /i dist\rustpm-0.1.4-x64.msi
+msiexec /i dist\rustpm-0.1.5-x64.msi
 
 # Silent install (must run from elevated/admin PowerShell):
-msiexec /i dist\rustpm-0.1.4-x64.msi /quiet
+msiexec /i dist\rustpm-0.1.5-x64.msi /quiet
 
 # Uninstall:
-msiexec /x dist\rustpm-0.1.4-x64.msi
+msiexec /x dist\rustpm-0.1.5-x64.msi
 ```
+
+The MSI appends its dedicated `cli` directory (default: `C:\Program Files\rustpm\cli`) to machine PATH. This directory contains a packaged copy of `rustpmctl.exe`; the original CLI and daemon locations stay available. MSI owns this PATH entry through repair, upgrade and uninstall. Keep manual PATH entries pointed at the original installation directory, rather than the package-owned `cli` directory: MSI cannot distinguish a manually added identical entry when uninstalling.
+
+Close and reopen PowerShell/cmd after installation. Fully exit and restart Windows Terminal if necessary; a new tab can inherit the old environment from its parent process.
 
 Build from source (with manual service registration):
 
@@ -118,22 +123,47 @@ Stop-Service -Name rustpm
 # msiexec /x C:\path\to\rustpm-<version>-x64.msi
 ```
 
+### Verify CLI discovery
+
+In a new terminal, run `rustpmctl --help` from any directory. Then run `rustpmctl list` using the required permissions (an elevated terminal on Windows, `sudo rustpmctl list` on macOS). Command discovery does not grant service-control permissions or bypass named-pipe/socket access checks.
+
+Windows diagnostics:
+
+```powershell
+Get-Command rustpmctl -All
+where.exe rustpmctl
+[Environment]::GetEnvironmentVariable("Path", "Machine")
+# Fallback, including when another command appears earlier on PATH:
+& "C:\Program Files\rustpm\rustpmctl.exe" --help
+```
+
+macOS diagnostics:
+
+```bash
+command -v rustpmctl
+ls -l /usr/local/bin/rustpmctl
+echo "$PATH"
+/usr/local/lib/rustpm/rustpmctl --help
+```
+
+Custom shells and `sudo` may omit `/usr/local/bin` from PATH; use the full path in that case. The pkg does not edit shell profiles.
+
 ### GitHub Releases (Windows amd64)
 
 The [release workflow](.github/workflows/release.yml) builds only the Windows
-amd64 MSI and attaches it to the corresponding GitHub Release. For `v0.1.4`,
-the asset is `rustpm-0.1.4-x64.msi`.
+amd64 MSI and attaches it to the corresponding GitHub Release. For `v0.1.5`,
+the asset is `rustpm-0.1.5-x64.msi`.
 
 After committing and pushing the workflow and packaging changes, publish the tag:
 
 ```bash
-git tag v0.1.4
-git push origin v0.1.4
+git tag v0.1.5
+git push origin v0.1.5
 ```
 
 The release tag sets the Cargo package, MSI product, and registry versions in
 the temporary CI checkout; dependency versions remain locked. To retry an existing tag, use
-**Actions → Release Windows MSI → Run workflow** (default tag: `v0.1.4`).
+**Actions → Release Windows MSI → Run workflow** (default tag: `v0.1.5`).
 Select the `main` branch to use the latest workflow fixes for an existing tag.
 The tagged commit must include the packaging changes. No additional repository
 secret is required; publication uses `GITHUB_TOKEN` with `contents: write`.

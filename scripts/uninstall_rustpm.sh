@@ -51,6 +51,8 @@ echo "      /Library/LaunchDaemons/${LABEL}.plist"
 echo "      /Library/LaunchDaemons/${PRIVD_LABEL}.plist"
 echo "  - installation directory:"
 echo "      /usr/local/lib/rustpm"
+echo "  - CLI link (only if it still points to ../lib/rustpm/rustpmctl):"
+echo "      /usr/local/bin/rustpmctl"
 echo "  - runtime/config directories:"
 echo "      /usr/local/etc/rustpm"
 echo "      /usr/local/etc/rustpm/programs.d"
@@ -89,6 +91,10 @@ run_cmd "launchctl bootout system/$PRIVD_LABEL >/dev/null 2>&1 || true"
 run_cmd "launchctl disable system/$PRIVD_LABEL >/dev/null 2>&1 || true"
 
 echo "Removing files..."
+# Check at execution time as well as in dry-run mode. Preserve unrelated files,
+# directories and replacement symlinks, including dangling links.
+# shellcheck disable=SC2016 # Expanded by run_cmd's sh -c, not by this shell.
+run_cmd 'if [ -L /usr/local/bin/rustpmctl ] && [ "$(readlink /usr/local/bin/rustpmctl)" = "../lib/rustpm/rustpmctl" ]; then rm -f /usr/local/bin/rustpmctl; fi'
 run_cmd "rm -f /Library/LaunchDaemons/${LABEL}.plist"
 run_cmd "rm -f /Library/LaunchDaemons/${PRIVD_LABEL}.plist"
 run_cmd "rm -rf /usr/local/lib/rustpm"

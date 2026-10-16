@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing release tag (sets the package and MSI version)
         required: true
-        default: v0.1.4
+        default: v0.1.5
         type: string
 
 permissions:
@@ -88,6 +88,9 @@ jobs:
           cargo test --locked --all-targets
           if ($LASTEXITCODE -ne 0) { throw "Release tests failed" }
           .\scripts\build_msi.ps1 -Target x86_64-pc-windows-msvc
+
+      - name: Inspect MSI command entry point
+        run: .\scripts\test_msi.ps1 -Msi '${{ steps.version.outputs.msi }}'
 
       - name: Publish release MSI
         uses: softprops/action-gh-release@v3
